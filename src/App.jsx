@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 
 // ─── Clasificación automática ────────────────────────────────────────────────
 const RULES = [
@@ -68,18 +68,18 @@ export default function App() {
   const [filterCat, setFilterCat] = useState("Todas");
 
   useEffect(() => {
-    (async () => {
-      try {
-        const r = await window.storage.get("gf-entries");
-        if (r?.value) setEntries(JSON.parse(r.value));
-      } catch (_) {}
-      setLoaded(true);
-    })();
+    try {
+      const saved = localStorage.getItem("gf-entries-arena-nexus");
+      if (saved) setEntries(JSON.parse(saved));
+    } catch (_) {}
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
-    window.storage.set("gf-entries", JSON.stringify(entries)).catch(() => {});
+    try {
+      localStorage.setItem("gf-entries-arena-nexus", JSON.stringify(entries));
+    } catch (_) {}
   }, [entries, loaded]);
 
   const showFlash = (msg, type = "ok") => {
