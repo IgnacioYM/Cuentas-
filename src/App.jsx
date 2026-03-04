@@ -10,7 +10,7 @@ const RULES = [
   { match: /F0000005620267/i,         cat: "G. Financiero – Póliza",    sub: "Comisión apertura" },
   { match: /^PRES\./i,                cat: "G. Financiero – Préstamo",  sub: "Intereses préstamo" },
   { match: /SEGUR.*CAIXA/i,          cat: "G. Financiero – Préstamo",  sub: "Seguro vinculado" },
-  { match: /MYBOX/i,                  cat: "G. Financiero – Préstamo",  sub: "Fidelización MYBOX" },
+  { match: /MYBOX/i,                  cat: "G. Financiero – Póliza",  sub: "Fidelización MYBOX" },
   { match: /SEVIAM/i,                 cat: "G. Financiero – Préstamo",  sub: "Fidelización SEVIAM" },
 ];
 
