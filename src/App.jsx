@@ -9,8 +9,8 @@ const RULES = [
   { match: /F0000005620267/i,         cat: "G. Financiero – Póliza",    sub: "Comisión apertura" },
   { match: /^PRES\./i,                cat: "G. Financiero – Préstamo",  sub: "Intereses préstamo" },
   { match: /SEGUR.*CAIXA/i,          cat: "G. Financiero – Préstamo",  sub: "Seguro vinculado" },
-  { match: /MYBOX/i,                  cat: "Fidelización – Préstamo",   sub: "MYBOX" },
-  { match: /SEVIAM/i,                 cat: "Fidelización – Préstamo",   sub: "SEVIAM" },
+  { match: /MYBOX/i,                  cat: "G. Financiero – Póliza",   sub: "Fidelización MYBOX" },
+  { match: /SEVIAM/i,                 cat: "G. Financiero – Préstamo",   sub: "FIdelización SEVIAM" },
 ];
 
 function classify(concept) {
@@ -45,7 +45,6 @@ function parseCSV(text, account) {
 const CAT_COLORS = {
   "G. Financiero – Póliza":    { bg: "#0f2942", accent: "#3b82f6" },
   "G. Financiero – Préstamo":  { bg: "#1a1a2e", accent: "#8b5cf6" },
-  "Fidelización – Préstamo":   { bg: "#0d2818", accent: "#22c55e" },
 };
 
 const fmt = (n) =>
