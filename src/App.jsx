@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
 
 // ─── Clasificación automática ────────────────────────────────────────────────
 const RULES = [
@@ -9,8 +10,8 @@ const RULES = [
   { match: /F0000005620267/i,         cat: "G. Financiero – Póliza",    sub: "Comisión apertura" },
   { match: /^PRES\./i,                cat: "G. Financiero – Préstamo",  sub: "Intereses préstamo" },
   { match: /SEGUR.*CAIXA/i,          cat: "G. Financiero – Préstamo",  sub: "Seguro vinculado" },
-  { match: /MYBOX/i,                  cat: "G. Financiero – Póliza",   sub: "Fidelización MYBOX" },
-  { match: /SEVIAM/i,                 cat: "G. Financiero – Préstamo",   sub: "FIdelización SEVIAM" },
+  { match: /MYBOX/i,                  cat: "G. Financiero – Préstamo",  sub: "Fidelización MYBOX" },
+  { match: /SEVIAM/i,                 cat: "G. Financiero – Préstamo",  sub: "Fidelización SEVIAM" },
 ];
 
 function classify(concept) {
@@ -41,7 +42,31 @@ function parseCSV(text, account) {
   return results;
 }
 
-// ─── Colores ──────────────────────────────────────────────────────────────────
+function parseXLSX(buffer, account) {
+  try {
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "DD/MM/YYYY" });
+    const results = [];
+    for (const row of rows) {
+      if (!row || row.length < 3) continue;
+      const concept = String(row[0] || "").trim();
+      const dateRaw = String(row[1] || "").trim();
+      const amountRaw = String(row[2] || "").replace("EUR", "").replace(/\./g, "").replace(",", ".").trim();
+      const amount = parseFloat(amountRaw);
+      if (isNaN(amount) || concept.toLowerCase() === "concepto") continue;
+      const cls = classify(concept);
+      if (!cls) continue;
+      if (amount >= 0) continue;
+      const id = `${account}-${dateRaw}-${concept}-${amount}`;
+      results.push({ id, date: dateRaw, concept, account, amount, cat: cls.cat, sub: cls.sub });
+    }
+    return results;
+  } catch (e) {
+    return [];
+  }
+}
+
 const CAT_COLORS = {
   "G. Financiero – Póliza":    { bg: "#0f2942", accent: "#3b82f6" },
   "G. Financiero – Préstamo":  { bg: "#1a1a2e", accent: "#8b5cf6" },
@@ -55,16 +80,71 @@ const parseDate = (d) => {
   return new Date(`${year}-${month}-${day}`);
 };
 
+// ─── Drop Zone ───────────────────────────────────────────────────────────────
+function DropZone({ label, name, onFile, file }) {
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef();
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    const f = e.dataTransfer.files[0];
+    if (f) onFile(f);
+  };
+
+  const handleFile = (e) => {
+    const f = e.target.files[0];
+    if (f) onFile(f);
+  };
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <span style={{ background: "#0f2942", color: "#60a5fa", padding: "3px 10px", borderRadius: 4, fontSize: 12, fontWeight: 700 }}>{label}</span>
+        <span style={{ color: "#475569", fontSize: 12 }}>{name}</span>
+      </div>
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current.click()}
+        style={{
+          border: `2px dashed ${dragging ? "#3b82f6" : file ? "#22c55e" : "#1e3a5f"}`,
+          borderRadius: 8, padding: "28px 20px", textAlign: "center",
+          cursor: "pointer", transition: "all 0.2s",
+          background: dragging ? "#0d1f35" : file ? "#052e16" : "#0a1628",
+        }}
+      >
+        <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} style={{ display: "none" }} />
+        {file ? (
+          <div>
+            <div style={{ fontSize: 20, marginBottom: 6 }}>✓</div>
+            <div style={{ color: "#4ade80", fontSize: 13, fontWeight: 600 }}>{file.name}</div>
+            <div style={{ color: "#475569", fontSize: 11, marginTop: 4 }}>Haz clic para cambiar</div>
+          </div>
+        ) : (
+          <div>
+            <div style={{ fontSize: 24, marginBottom: 8 }}>📂</div>
+            <div style={{ color: "#475569", fontSize: 13 }}>Arrastra el Excel aquí o haz clic para seleccionar</div>
+            <div style={{ color: "#334155", fontSize: 11, marginTop: 4 }}>.xlsx · .xls · .csv</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [entries, setEntries] = useState([]);
-  const [ccText, setCcText] = useState("");
-  const [cpText, setCpText] = useState("");
+  const [ccFile, setCcFile] = useState(null);
+  const [cpFile, setCpFile] = useState(null);
   const [tab, setTab] = useState("tabla");
   const [flash, setFlash] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [filterCat, setFilterCat] = useState("Todas");
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     try {
@@ -83,21 +163,45 @@ export default function App() {
 
   const showFlash = (msg, type = "ok") => {
     setFlash({ msg, type });
-    setTimeout(() => setFlash(null), 3000);
+    setTimeout(() => setFlash(null), 3500);
   };
 
-  const handleImport = () => {
-    const newCC = parseCSV(ccText, "CC");
-    const newCP = parseCSV(cpText, "CP");
-    const all = [...newCC, ...newCP];
-    if (!all.length) { showFlash("No se encontraron gastos financieros en los datos pegados.", "err"); return; }
-    const existingIds = new Set(entries.map((e) => e.id));
-    const fresh = all.filter((e) => !existingIds.has(e.id));
-    if (!fresh.length) { showFlash("Todos los movimientos ya estaban registrados.", "warn"); return; }
-    setEntries((prev) => [...prev, ...fresh].sort((a, b) => parseDate(a.date) - parseDate(b.date)));
-    setCcText(""); setCpText("");
-    showFlash(`✓ ${fresh.length} nuevo${fresh.length > 1 ? "s" : ""} movimiento${fresh.length > 1 ? "s" : ""} importado${fresh.length > 1 ? "s" : ""}.`);
-    setTab("tabla");
+  const readFile = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
+    if (file.name.endsWith(".csv")) {
+      reader.readAsText(file, "utf-8");
+    } else {
+      reader.readAsArrayBuffer(file);
+    }
+  });
+
+  const handleImport = async () => {
+    if (!ccFile && !cpFile) { showFlash("Selecciona al menos un archivo.", "err"); return; }
+    setImporting(true);
+    try {
+      let all = [];
+      for (const [file, account] of [[ccFile, "CC"], [cpFile, "CP"]]) {
+        if (!file) continue;
+        const data = await readFile(file);
+        const results = file.name.endsWith(".csv")
+          ? parseCSV(data, account)
+          : parseXLSX(data, account);
+        all = [...all, ...results];
+      }
+      if (!all.length) { showFlash("No se encontraron gastos financieros en los archivos.", "err"); setImporting(false); return; }
+      const existingIds = new Set(entries.map((e) => e.id));
+      const fresh = all.filter((e) => !existingIds.has(e.id));
+      if (!fresh.length) { showFlash("Todos los movimientos ya estaban registrados.", "warn"); setImporting(false); return; }
+      setEntries((prev) => [...prev, ...fresh].sort((a, b) => parseDate(a.date) - parseDate(b.date)));
+      setCcFile(null); setCpFile(null);
+      showFlash(`✓ ${fresh.length} movimiento${fresh.length > 1 ? "s" : ""} importado${fresh.length > 1 ? "s" : ""}.`);
+      setTab("tabla");
+    } catch (e) {
+      showFlash("Error leyendo los archivos.", "err");
+    }
+    setImporting(false);
   };
 
   const handleDelete = (id) => {
@@ -130,7 +234,11 @@ export default function App() {
     const a = document.createElement("a"); a.href = url; a.download = "gastos_financieros.csv"; a.click();
   };
 
-  if (!loaded) return <div style={{ background: "#080f1a", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#3b82f6", fontFamily: "monospace", fontSize: 14 }}>Cargando…</div>;
+  if (!loaded) return (
+    <div style={{ background: "#080f1a", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#3b82f6", fontFamily: "monospace", fontSize: 14 }}>
+      Cargando…
+    </div>
+  );
 
   return (
     <div style={{ background: "#080f1a", minHeight: "100vh", fontFamily: "'DM Mono', 'Fira Code', monospace", color: "#e2e8f0" }}>
@@ -145,7 +253,6 @@ export default function App() {
         }}>{flash.msg}</div>
       )}
 
-      {/* Header */}
       <div style={{ borderBottom: "1px solid #1e3a5f", padding: "22px 32px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <div style={{ fontSize: 11, color: "#3b82f6", letterSpacing: 3, textTransform: "uppercase", marginBottom: 4 }}>Arena Nexus · Seguimiento</div>
@@ -157,7 +264,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div style={{ display: "flex", gap: 0, borderBottom: "1px solid #1e3a5f", padding: "0 32px" }}>
         {[["tabla", "📋 Tabla"], ["resumen", "📊 Resumen"], ["importar", "⬆ Importar"]].map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} style={{
@@ -172,7 +278,6 @@ export default function App() {
 
       <div style={{ padding: "24px 32px" }}>
 
-        {/* ── TABLA ── */}
         {tab === "tabla" && (
           <div>
             <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -244,7 +349,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── RESUMEN ── */}
         {tab === "resumen" && (
           <div style={{ maxWidth: 540 }}>
             <div style={{ marginBottom: 20, fontSize: 12, color: "#475569" }}>Acumulado total del período</div>
@@ -288,36 +392,21 @@ export default function App() {
           </div>
         )}
 
-        {/* ── IMPORTAR ── */}
         {tab === "importar" && (
           <div style={{ maxWidth: 720 }}>
-            <div style={{ fontSize: 13, color: "#475569", marginBottom: 20, lineHeight: 1.7 }}>
-              Copia las filas del Excel del extracto (Ctrl+C) y pégalas aquí (Ctrl+V). La app detecta automáticamente el formato, identifica los gastos financieros e ignora duplicados.
+            <div style={{ fontSize: 13, color: "#475569", marginBottom: 24, lineHeight: 1.7 }}>
+              Arrastra los archivos Excel directamente o haz clic para seleccionarlos. La app identifica los gastos financieros automáticamente e ignora duplicados.
             </div>
-            {[["CC", ccText, setCcText, "Cuenta Corriente"], ["CP", cpText, setCpText, "Póliza de Crédito"]].map(([label, val, setter, name]) => (
-              <div key={label} style={{ marginBottom: 20 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <span style={{ background: "#0f2942", color: "#60a5fa", padding: "3px 10px", borderRadius: 4, fontSize: 12, fontWeight: 700 }}>{label}</span>
-                  <span style={{ color: "#475569", fontSize: 12 }}>{name}</span>
-                </div>
-                <textarea
-                  value={val}
-                  onChange={(e) => setter(e.target.value)}
-                  placeholder={`Copia las filas del Excel de ${name} y pégalas aquí…`}
-                  style={{
-                    width: "100%", height: 140, background: "#0a1628", border: "1px solid #1e3a5f",
-                    borderRadius: 8, color: "#94a3b8", fontFamily: "inherit", fontSize: 12,
-                    padding: 12, resize: "vertical", outline: "none", boxSizing: "border-box", lineHeight: 1.6
-                  }}
-                />
-              </div>
-            ))}
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <button onClick={handleImport}
-                onMouseEnter={(e) => e.target.style.background = "#2563eb"}
-                onMouseLeave={(e) => e.target.style.background = "#1d4ed8"}
-                style={{ background: "#1d4ed8", border: "none", color: "#fff", padding: "10px 24px", borderRadius: 8, cursor: "pointer", fontSize: 14, fontFamily: "inherit", fontWeight: 600 }}>
-                Importar movimientos
+            <DropZone label="CC" name="Cuenta Corriente" file={ccFile} onFile={setCcFile} />
+            <DropZone label="CP" name="Póliza de Crédito" file={cpFile} onFile={setCpFile} />
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+              <button
+                onClick={handleImport}
+                disabled={importing}
+                onMouseEnter={(e) => { if (!importing) e.target.style.background = "#2563eb"; }}
+                onMouseLeave={(e) => { if (!importing) e.target.style.background = "#1d4ed8"; }}
+                style={{ background: importing ? "#1e3a5f" : "#1d4ed8", border: "none", color: "#fff", padding: "10px 24px", borderRadius: 8, cursor: importing ? "default" : "pointer", fontSize: 14, fontFamily: "inherit", fontWeight: 600 }}>
+                {importing ? "Procesando…" : "Importar"}
               </button>
               {entries.length > 0 && (
                 <button onClick={handleClear} style={{ background: "transparent", border: "1px solid #450a0a", color: "#f87171", padding: "9px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>
