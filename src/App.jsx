@@ -346,6 +346,7 @@ export default function App() {
   const [tab, setTab]               = useState("facturas");
   const [flash, setFlash]           = useState(null);
   const [delConfirm, setDelConfirm] = useState(null);
+  const [confirmBorrarTodo, setConfirmBorrarTodo] = useState(false);
   const [loaded, setLoaded]         = useState(false);
   const [filterCat, setFilterCat]   = useState("Todas");
   const [importing, setImporting]   = useState(false);
@@ -818,10 +819,19 @@ export default function App() {
                       style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>
                       Exportar CSV
                     </button>
-                    <button onClick={()=>{ if(window.confirm("¿Borrar todas las facturas? Esta acción no se puede deshacer.")) { setInvoices([]); invoicesRef.current=[]; showFlash("Todas las facturas eliminadas.","err"); }}}
-                      style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>
-                      Borrar todo
-                    </button>
+                    {!confirmBorrarTodo
+                      ? <button onClick={()=>setConfirmBorrarTodo(true)}
+                          style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>
+                          Borrar todo
+                        </button>
+                      : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                          <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro?</span>
+                          <button onClick={()=>{ setInvoices([]); invoicesRef.current=[]; setConfirmBorrarTodo(false); showFlash("Todas las facturas eliminadas.","err"); }}
+                            style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
+                          <button onClick={()=>setConfirmBorrarTodo(false)}
+                            style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
+                        </span>
+                    }
                   </div>
                 </div>
                 <div style={{ overflowX:"auto" }}>
