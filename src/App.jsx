@@ -414,10 +414,14 @@ export default function App() {
   };
 
   // ── API call con reintento ──
+  const API_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? "https://api.anthropic.com/v1/messages"
+    : "/api/analyze";
+
   const callAPI = async (base64, filename, retries=2) => {
     for (let attempt=0; attempt<=retries; attempt++) {
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const res = await fetch(API_URL, {
           method: "POST",
           headers: { "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
           body: JSON.stringify({
@@ -431,7 +435,6 @@ export default function App() {
         });
         if (res.status === 429) {
           const wait = (attempt+1) * 3000;
-          console.log(`429 en ${filename}, esperando ${wait}ms...`);
           await new Promise(r => setTimeout(r, wait));
           continue;
         }
