@@ -68,14 +68,14 @@ const CATEGORIAS = [
 const SYSTEM_PROMPT = `Eres un asistente contable de Arena Nexus S.L., empresa de inversión inmobiliaria española.
 
 ═══ ACTIVOS ═══
-AN = sociedad holding
-FMM3 = inmueble (precio adquisición 180.000€, vendedor Cerberus)
-PR30 = inmueble (precio adquisición 205.000€, vendedor Cerberus)
-BB5 = Barrera de Baix 5, Palma (precio adquisición 180.000€, familia vendedora)
-PB27 = Padre Bartolomé 27, Palma (precio adquisición 325.000€, Servihabitat)
-E65 = inmueble (precio adquisición 165.000€, vendedor Cerberus)
-M1 = inmueble (precio adquisición 179.000€, vendedor Cerberus)
-AG55 = inmueble (precio adquisición 279.650€, vendedor Cerberus)
+AN = sociedad holding Arena Nexus S.L.
+FMM3 = Francesc Martí Mora 3 / Francesc Martí i Mora 3, Palma (también: C/ Francesc Marti Mora, Carrer Francesc Martí Mora) — precio adquisición 180.000€, vendedor Cerberus
+PR30 = Pascual Ribot 30 / Pasqual Ribot 30, Palma (también: C/ Pascual Ribot, Carrer Pasqual Ribot) — precio adquisición 205.000€, vendedor Cerberus
+BB5 = Barrera de Baix 5 / Barrera de Baix 5, Palma (también: C/ Barrera de Baix, Carrer de la Barrera de Baix) — precio adquisición 180.000€, familia vendedora
+PB27 = Padre Bartolomé 27 / Paul Bouvy 27 / Pare Bartomeu 27, Palma (también: C/ Padre Bartolomé Salva, Carrer Pare Bartomeu) — precio adquisición 325.000€, Servihabitat
+E65 = Elfo 65, Ciudad Lineal, Madrid — precio adquisición 165.000€, vendedor Cerberus
+M1 = Molino 1, Villanueva de la Cañada, Madrid — precio adquisición 179.000€, vendedor Cerberus
+AG55 = Alfonso Gómez 55, San Blas, Madrid — precio adquisición 279.650€, vendedor Cerberus
 
 ═══ CATEGORÍAS ═══
 "Costes de implementación (SPV, abogados, etc.)"
@@ -157,9 +157,17 @@ AIREUROPA / VIAJES:
 PEDRO FERNÁNDEZ / indemnizaciones:
 - Siempre → Costes de posesión, activo por contexto
 
-═══ RETENCIÓN IRPF ═══
-- Es normal y estándar. Ponla como número negativo en "otros". NO la menciones en notas.
-- Generalmente es el 15% de la base (cuantia).
+═══ EXTRACCIÓN DE IMPORTES ═══
+- "cuantia" = Base Imponible + Base no Sujeta + cualquier otro concepto antes del IVA. Es TODO lo que se cobra antes de aplicar IVA y retención.
+- "iva" = importe total de IVA (suma de todos los tipos si hay varios)
+- "otros" = retención IRPF como número NEGATIVO (ej: -194.53). Es normal y estándar, no la menciones en notas.
+- El total factura debe ser: cuantia + iva + otros
+- Si hay suplidos, papel timbrado, base no sujeta → incorpóralos en "cuantia"
+
+═══ CATEGORÍA ═══
+- SIEMPRE rellena la categoría. Nunca dejes vacío.
+- Si hay duda entre dos categorías, elige la más probable.
+- Las notarías de compraventa → "Adquisición (incluye gastos e impuestos)" siempre.
 
 ═══ CAMPO NOTAS ═══
 - SOLO para dudas reales de activo cuando no puedes determinarlo con certeza.
@@ -167,15 +175,18 @@ PEDRO FERNÁNDEZ / indemnizaciones:
 - Ejemplo de duda válida: "CV inmuebles con varios activos, necesita reparto manual"
 
 Responde SOLO JSON válido sin texto adicional:
-{"fecha":"DD/MM/YYYY","proveedor":"nombre tal como aparece en factura","concepto":"descripción breve","activo":"código exacto o vacío si duda","categoria":"categoría exacta","cuantia":número,"iva":número,"otros":número_negativo_o_null,"notas":"solo si hay duda real, si no vacío"}`;
+{"numero":"número de factura exacto como aparece (ej: AAM2025_4, L/00435, F-2025-001) o vacío si no hay","fecha":"DD/MM/YYYY","proveedor":"nombre tal como aparece en factura","concepto":"descripción breve","activo":"código exacto o vacío si duda","categoria":"categoría exacta","cuantia":número,"iva":número,"otros":número_negativo_o_null,"notas":"solo si hay duda real, si no vacío"}`;
 
 const fmt = n => new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", minimumFractionDigits: 2 }).format(n);
 const parseDate = d => { if (!d) return new Date(0); const [day,mon,yr] = d.split("/"); return new Date(`${yr}-${mon}-${day}`); };
 const invoiceKey = inv => {
-  const fecha    = (inv.fecha||"").trim();
-  const prov     = (inv.proveedor||"").toLowerCase().trim().replace(/\s+/g," ");
-  const cuantia  = parseFloat(inv.cuantia||0).toFixed(2);
-  const iva      = parseFloat(inv.iva||0).toFixed(2);
+  const fecha   = (inv.fecha||"").trim();
+  const prov    = (inv.proveedor||"").toLowerCase().trim().replace(/\s+/g," ");
+  const cuantia = parseFloat(inv.cuantia||0).toFixed(2);
+  const iva     = parseFloat(inv.iva||0).toFixed(2);
+  const num     = (inv.numero||"").trim().toLowerCase();
+  // Si hay número de factura, es la clave más fiable
+  if (num) return `${prov}|${num}`;
   return `${fecha}|${prov}|${cuantia}|${iva}`;
 };
 
@@ -483,7 +494,7 @@ export default function App() {
     const errors = [];
     results.forEach(({ result, fd }) => {
       if (result.status === "fulfilled" && result.value) {
-        const inv = { ...result.value, otros: result.value.otros||null, comentario: "" };
+        const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "" };
         const hasDoubt = !inv.activo || (inv.notas && inv.notas.trim() !== "");
         if (hasDoubt) needsReview.push({ ...inv, _file: fd.file });
         else autoSaved.push({ ...inv, id: `inv-${Date.now()}-${Math.random()}` });
@@ -536,6 +547,7 @@ export default function App() {
         ...draft, _file: undefined,
         id: `inv-${Date.now()}-${i}-${Math.random()}`,
         activo: s.activo,
+        numero: draft.numero ? `${draft.numero}-${i+1}` : "",
         cuantia: parseFloat(((s.pct/100)*(draft.cuantia||0)).toFixed(2)),
         iva:     parseFloat(((s.pct/100)*(draft.iva||0)).toFixed(2)),
         otros:   draft.otros!=null ? parseFloat(((s.pct/100)*(draft.otros||0)).toFixed(2)) : null,
@@ -840,7 +852,7 @@ export default function App() {
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                     <thead>
                       <tr style={{ background:"#0d1f35" }}>
-                        {["Fecha","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total s/ret.","Total factura","Comentario",""].map(h => (
+                        {["Nº","Fecha","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total s/ret.","Total factura","Comentario",""].map(h => (
                           <th key={h} style={{ padding:"9px 10px", textAlign:["Cuantía","IVA","Ret.","Total s/ret.","Total factura"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>
                         ))}
                       </tr>
@@ -850,6 +862,7 @@ export default function App() {
                         <tr key={inv.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }}
                           onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"}
                           onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
+                          <td style={{ padding:"8px 10px", color:"#475569", fontSize:11, whiteSpace:"nowrap" }}>{inv.numero||"—"}</td>
                           <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{inv.fecha}</td>
                           <td style={{ padding:"8px 10px", color:"#cbd5e1", maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.proveedor}</td>
                           <td style={{ padding:"8px 10px", color:"#94a3b8", maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.concepto}</td>
