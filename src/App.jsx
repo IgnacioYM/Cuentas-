@@ -465,19 +465,17 @@ export default function App() {
       r.readAsDataURL(file);
     })));
 
-    // Serie de a 1 para no saturar la API
+    // Lotes de 3 con pausa entre lotes para no saturar
+    const BATCH = 3;
     const results = [];
-    for (let i=0; i<fileData.length; i++) {
-      const fd = fileData[i];
-      try {
-        const val = await callAPI(fd.base64, fd.name);
-        results.push({ result:{ status:"fulfilled", value:val }, fd });
-      } catch(e) {
-        console.error(`Error en ${fd.name}:`, e.message);
-        results.push({ result:{ status:"rejected", reason:e.message }, fd });
-      }
-      setProgress({ current: i+1, total: fileData.length });
-      if (i < fileData.length-1) await new Promise(r => setTimeout(r, 800));
+    for (let i=0; i<fileData.length; i+=BATCH) {
+      const batch = fileData.slice(i, i+BATCH);
+      const batchResults = await Promise.allSettled(
+        batch.map(fd => callAPI(fd.base64, fd.name))
+      );
+      batchResults.forEach((r, j) => results.push({ result: r.status==="fulfilled" ? {status:"fulfilled",value:r.value} : {status:"rejected",reason:r.reason?.message}, fd: batch[j] }));
+      setProgress({ current: Math.min(i+BATCH, fileData.length), total: fileData.length });
+      if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 1000));
     }
 
     const autoSaved = [];
@@ -589,6 +587,7 @@ export default function App() {
   const filtered = filterCat==="Todas" ? entries : entries.filter(e=>e.cat===filterCat);
 
   const exportCSV = () => {
+    const BOM = "\uFEFF";
     const header = "Fecha;Proveedor;Concepto;Activo;Categoría;Cuantía;IVA;Retención;Total s/ret.;Total factura;Comentario\n";
     const rows = invoices.map(e => [
       e.fecha, e.proveedor, e.concepto, e.activo, e.categoria,
@@ -599,7 +598,7 @@ export default function App() {
       ((e.cuantia||0)+(e.iva||0)+(e.otros||0)).toFixed(2).replace(".",","),
       e.comentario||""
     ].join(";")).join("\n");
-    const blob = new Blob([header+rows], { type:"text/csv;charset=utf-8;" });
+    const blob = new Blob([BOM+header+rows], { type:"text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href=url; a.download="facturas_arena_nexus.csv"; a.click();
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
