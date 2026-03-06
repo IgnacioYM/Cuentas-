@@ -412,24 +412,38 @@ export default function App() {
     }
   };
 
-  // ── API call ──
-  const callAPI = async (base64, filename) => {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001", max_tokens: 500,
-        system: SYSTEM_PROMPT,
-        messages: [{ role:"user", content:[
-          { type:"document", source:{ type:"base64", media_type:"application/pdf", data:base64 }},
-          { type:"text", text:`Extrae y clasifica esta factura. Archivo: "${filename}"` }
-        ]}]
-      })
-    });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message||"Error API"); }
-    const data = await res.json();
-    const text = data.content.map(c=>c.text||"").join("");
-    return JSON.parse(text.replace(/```json|```/g,"").trim());
+  // ── API call con reintento ──
+  const callAPI = async (base64, filename, retries=2) => {
+    for (let attempt=0; attempt<=retries; attempt++) {
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
+          body: JSON.stringify({
+            model: "claude-haiku-4-5-20251001", max_tokens: 800,
+            system: SYSTEM_PROMPT,
+            messages: [{ role:"user", content:[
+              { type:"document", source:{ type:"base64", media_type:"application/pdf", data:base64 }},
+              { type:"text", text:`Extrae y clasifica esta factura. Archivo: "${filename}". Responde SOLO el JSON.` }
+            ]}]
+          })
+        });
+        if (res.status === 429) {
+          const wait = (attempt+1) * 3000;
+          console.log(`429 en ${filename}, esperando ${wait}ms...`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+        if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message||`HTTP ${res.status}`); }
+        const data = await res.json();
+        const text = data.content.map(c=>c.text||"").join("");
+        const clean = text.replace(/```json|```/g,"").trim();
+        return JSON.parse(clean);
+      } catch(e) {
+        if (attempt === retries) throw e;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
   };
 
   // ── Analizar lote ──
@@ -447,19 +461,24 @@ export default function App() {
       r.readAsDataURL(file);
     })));
 
-    const BATCH = 2;
-    const DELAY = 1500; // ms entre lotes
+    // Serie de a 1 para no saturar la API
     const results = [];
-    for (let i=0; i<fileData.length; i+=BATCH) {
-      if (i > 0) await new Promise(r => setTimeout(r, DELAY));
-      const batch = fileData.slice(i, i+BATCH);
-      const batchRes = await Promise.allSettled(batch.map(f => callAPI(f.base64, f.name)));
-      batchRes.forEach((r,j) => results.push({ result:r, fd:batch[j] }));
-      setProgress({ current: Math.min(i+BATCH, fileData.length), total: fileData.length });
+    for (let i=0; i<fileData.length; i++) {
+      const fd = fileData[i];
+      try {
+        const val = await callAPI(fd.base64, fd.name);
+        results.push({ result:{ status:"fulfilled", value:val }, fd });
+      } catch(e) {
+        console.error(`Error en ${fd.name}:`, e.message);
+        results.push({ result:{ status:"rejected", reason:e.message }, fd });
+      }
+      setProgress({ current: i+1, total: fileData.length });
+      if (i < fileData.length-1) await new Promise(r => setTimeout(r, 800));
     }
 
     const autoSaved = [];
     const needsReview = [];
+    const errors = [];
     results.forEach(({ result, fd }) => {
       if (result.status === "fulfilled" && result.value) {
         const inv = { ...result.value, otros: result.value.otros||null, comentario: "" };
@@ -467,7 +486,7 @@ export default function App() {
         if (hasDoubt) needsReview.push({ ...inv, _file: fd.file });
         else autoSaved.push({ ...inv, id: `inv-${Date.now()}-${Math.random()}` });
       } else {
-        showFlash(`Error en ${fd?.name}`, "err");
+        errors.push(fd.name + ": " + (result.reason||"error"));
       }
     });
 
@@ -477,8 +496,12 @@ export default function App() {
     setProgress({ current:0, total:0 });
     setPdfFiles([]);
 
-    if (needsReview.length === 0) {
-      showFlash(`✓ ${autoSaved.length} factura${autoSaved.length!==1?"s":""} procesada${autoSaved.length!==1?"s":""} automáticamente.`);
+    if (errors.length) showFlash(`⚠ ${errors.length} error(es): ${errors[0]}`, "err");
+
+    if (needsReview.length === 0 && autoSaved.length === 0 && errors.length === 0) {
+      showFlash("No se procesó ninguna factura.", "warn");
+    } else if (needsReview.length === 0) {
+      showFlash(`✓ ${autoSaved.length} factura${autoSaved.length!==1?"s":""} guardada${autoSaved.length!==1?"s":""} automáticamente.`);
     } else {
       if (autoSaved.length) showFlash(`✓ ${autoSaved.length} guardada${autoSaved.length!==1?"s":""} auto. ${needsReview.length} requieren revisión.`, "warn");
       setReviewQueue(needsReview);
