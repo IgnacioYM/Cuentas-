@@ -88,13 +88,24 @@ AG55 = Alfonso Gómez 55, San Blas, Madrid — precio adquisición 279.650€, v
 
 ═══ REGLAS POR PROVEEDOR (aplica en este orden) ═══
 
-ALZAI / ALZAI ALSP SL:
-- Concepto gestoría/contabilidad mensual (150€ base) → AN, Opex
-- Concepto "Mod 600" o importe ~1.350€ → AN, Costes de implementación
-- Cualquier otra factura Alzai → AN, Opex
+FERRETERÍA LA CENTRAL / LA CENTRAL DE SAN MAGIN:
+- Siempre → AN, Capex (material de obra/ferretería)
+- Aunque el ticket sea de Palma, el gasto se asigna a AN a menos que especifique inmueble
 
-ARENA AM:
-- Siempre → AN, Comisión de gestión
+AIREUROPA / AIR EUROPA:
+- Siempre → AN, Opex
+- CRÍTICO: usar EXCLUSIVAMENTE el campo "Total a Pagar / Amount to be Pay in EUR" como cifra real
+- cuantia = "Total a Pagar" - IVA. En el ejemplo real: 92,46 - 14,27 = 78,19€
+- iva = suma de todos los impuestos reales pagados (14,27€ en el ejemplo)
+- IGNORAR "Total Factura" (288,21€) — ese es antes del descuento residente, no lo que paga Arena Nexus
+
+CONSELL DE MALLORCA / AJUNTAMENT PALMA / AJUNTAMENT DE PALMA:
+- Taxa residuos demolición → BB5, Capex
+- ICIO (Impuesto sobre construcciones) → BB5, Capex. Importe exacto del documento (ej: 340€, NO 8.500€)
+- Limpieza escombros → BB5, Capex
+- Taxa expedició de documents / licencias → AN, Opex (ej: 4,75€)
+- CRÍTICO: estos documentos NO tienen IVA. iva = 0, otros = null
+- CRÍTICO: leer el importe EXACTO. La "Cuota" o "Total Cobrado" es el importe real. NO usar el valor del inmueble ni ningún otro número grande que aparezca en el documento.
 
 ZADAL:
 - Siempre → AN, Costes de implementación
@@ -107,9 +118,9 @@ REGISTRADORES ESPAÑA / REGISTRO MERCANTIL / JOSE MIGUEL BAÑON BERNARD / REGIST
 - Registro de constitución sociedad → AN, Costes de implementación
 - Registro de propiedad post-compraventa → activo según inmueble, Adquisición
 
-NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIOS / cualquier notaría:
+NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIOS / JUAN BARRIOS ALVAREZ / cualquier notaría:
 - "Constitución", "titularidad real", "poderes", "póliza" → AN, Costes de implementación
-- "Préstamo", "contrato préstamo" → AN, Costes de implementación
+- "Préstamo", "contrato préstamo", "afianzamiento", "aval" → AN, Costes de implementación
 - "CV inmuebles" / "compraventa" → Adquisición, activo según valor escritura o dirección:
     · ~180.000€ y contexto Cerberus → FMM3
     · ~205.000€ → PR30
@@ -119,10 +130,10 @@ NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIO
     · ~179.000€ → M1
     · ~279.650€ → AG55
     · Si hay varios inmuebles en la misma factura → deja activo vacío para reparto manual
+- cuantia = Base Imponible + Base no Sujeta (suplidos, papel timbrado)
 
 AGENCIA TRIBUTARIA:
 - ITP ~13.617€ → BB5, Adquisición
-- ITP ~13.617€ duplicado → BB5, Adquisición
 - ITP ~18.788€ → PR30, Adquisición
 - ITP ~15.056€ → FMM3, Adquisición
 - ITP ~26.000€ → PB27, Adquisición
@@ -131,31 +142,30 @@ AGENCIA TRIBUTARIA:
 GABRIEL LLABRÉS COMAMALA:
 - Siempre → BB5, Capex (arquitecto)
 
-CONSELL DE MALLORCA / AJUNTAMENT PALMA:
-- Residuos, limpieza, impuesto construcción, ICIO → BB5, Capex
-
 RICARDO RUIZ RUBIO:
-- Siempre → PB27, Capex (detective posesión)
+- Siempre → PB27, Capex (detective posesión). NUNCA otro activo.
 
 DETECTIVE (cualquier proveedor con concepto detective):
-- Si menciona PB27 o Palma Bartolomé → PB27, Capex
-- Si menciona FMM3 → FMM3, Capex
+- Si menciona PB27, Bartolomé, Paul Bouvy o Pare Bartomeu → PB27, Capex
+- Si menciona FMM3 o Francesc Martí → FMM3, Capex
 - Si no hay info → deja activo vacío
 
 VÍCTOR JAVIER CUENCA CANALEJO:
-- Abogado → Costes legales, activo según contexto (FMM3 o PR30)
+- Abogado → Costes legales, activo según dirección mencionada en concepto
+- Francesc Martí / FMM3 → FMM3
+- Pascual Ribot / PR30 → PR30
+- Pau Bouvy / Padre Bartolomé / PB27 → PB27
 
 CERBERUS / SERVIHABITAT / FAMILIA VENDEDORA:
 - CV inmuebles / precio adquisición → Adquisición, activo por importe
 
-CORREOS:
-- Burofax → Capex (Posesión), activo según inmueble mencionado
+CORREOS / SOCIEDAD ESTATAL CORREOS:
+- Burofax → Capex (Posesión), activo según nombre del archivo o inmueble en el pedido
+- Sin retención, sin IVA adicional — leer exactamente lo que pone
 
-AIREUROPA / VIAJES:
-- Siempre → AN, Opex
-
-PEDRO FERNÁNDEZ / indemnizaciones:
-- Siempre → Costes de posesión, activo por contexto
+PEDRO FERNÁNDEZ / PEDRO FERNÁNDEZ CASTAÑO / indemnizaciones:
+- Siempre → BB5, Costes de posesión (vive en Barrera de Baix 5)
+- Sin IVA, sin retención
 
 ═══ EXTRACCIÓN DE IMPORTES ═══
 - "cuantia" = Base Imponible + Base no Sujeta + cualquier otro concepto antes del IVA. Es TODO lo que se cobra antes de aplicar IVA y retención.
