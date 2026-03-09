@@ -88,9 +88,17 @@ AG55 = Alfonso Gómez 55, San Blas, Madrid — precio adquisición 279.650€, v
 
 ═══ REGLAS POR PROVEEDOR (aplica en este orden) ═══
 
-FERRETERÍA LA CENTRAL / LA CENTRAL DE SAN MAGIN:
-- Siempre → AN, Capex (material de obra/ferretería)
-- Aunque el ticket sea de Palma, el gasto se asigna a AN a menos que especifique inmueble
+FERRETERÍA LA CENTRAL / LA CENTRAL DE SAN MAGIN / ferretería:
+- Siempre → BB5, Capex (material de obra para Barrera de Baix)
+
+ARENA ASSET MANAGEMENT / ARENA AM / Arena Asset Management S.L.:
+- Siempre → AN, Comisión de gestión
+- Sin retención, sin IRPF
+- cuantia = base imponible, iva = 21% de la base
+
+ALZAI / ALZAI ALSP SL:
+- Gestoría mensual (base ~150€) → AN, Opex
+- Concepto incluye "Mod 600", "Modelo 600", "Presentación Modelo" o base ≥500€ → AN, Costes de implementación (SPV, abogados, etc.)
 
 AIREUROPA / AIR EUROPA:
 - Siempre → AN, Opex
