@@ -155,7 +155,7 @@ NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIO
     · ~165.000€ → E65
     · ~179.000€ → M1
     · ~279.650€ → AG55
-    · Valor muy alto (ej: ~623.650€ = varios inmuebles Madrid) → E65, notas: "CV múltiples inmuebles Madrid"
+    ·Valor muy alto (ej: ~623.650€ = varios inmuebles) → dejar activo VACÍO, notas: "CV múltiples inmuebles — repartir entre E65, M1 y AG55 con split"
 - cuantia = Base Imponible + Base no Sujeta (suplidos: papel timbrado, sellos seguridad, timbres)
   EJEMPLO REAL: BI=1.296,85€ + suplidos (7,95+0,15+0,15)=8,25€ → cuantia = 1.296,85 + 8,25 = 1.305,10€
   Suma cada céntimo. Comprueba que cuantia + iva + otros = Total Factura.
@@ -517,7 +517,7 @@ export default function App() {
     })));
 
     // Lotes de 3 con pausa entre lotes para no saturar
-    const BATCH = 3;
+    const BATCH = 2;
     const results = [];
     for (let i=0; i<fileData.length; i+=BATCH) {
       const batch = fileData.slice(i, i+BATCH);
@@ -526,7 +526,7 @@ export default function App() {
       );
       batchResults.forEach((r, j) => results.push({ result: r.status==="fulfilled" ? {status:"fulfilled",value:r.value} : {status:"rejected",reason:r.reason?.message}, fd: batch[j] }));
       setProgress({ current: Math.min(i+BATCH, fileData.length), total: fileData.length });
-      if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 1000));
+      if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 2500));
     }
 
     const autoSaved = [];
