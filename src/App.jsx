@@ -199,11 +199,13 @@ PEDRO FERNÁNDEZ / PEDRO FERNÁNDEZ CASTAÑO:
 - IMPORTANTE: puede ser un acuerdo firmado, no factura estándar. Procesarlo igual.
 
 ═══ EXTRACCIÓN DE IMPORTES ═══
-- "cuantia" = Base Imponible + Base no Sujeta + suplidos. TODO antes de IVA y retención.
-  Suma cada línea con PRECISIÓN. Verifica: cuantia + iva + otros = Total Factura.
-- "iva" = importe total de IVA
-- "otros" = retención IRPF como número NEGATIVO (ej: -194.53). Es estándar, no mencionarlo en notas.
-- Si hay suplidos, papel timbrado, base no sujeta → sumar en "cuantia"
+- "cuantia" = Base Imponible + Base no Sujeta (suplidos, papel timbrado, sellos). Es el importe total ANTES de IVA e IRPF.
+- "iva" = el importe de IVA que aparece en la factura. Se calcula sobre la Base Imponible SOLAMENTE (no sobre suplidos/base no sujeta).
+- "otros" = retención IRPF como número NEGATIVO. Se calcula sobre la Base Imponible SOLAMENTE. Es estándar, no mencionarlo en notas.
+- EJEMPLO NOTARÍA: BI=1.296,85 + suplidos=8,25 → cuantia=1.305,10 | IVA=21% de 1.296,85=272,34 | IRPF=15% de 1.296,85=-194,53 | Total=1.382,91
+- Si hay suplidos, papel timbrado, base no sujeta, base exenta → sumar TODOS en "cuantia"
+- Si NO hay Base no Sujeta → cuantia = Base Imponible directamente
+- VERIFICACIÓN: Total factura = cuantia + iva + otros. Si no cuadra, revisa.
 
 ═══ CATEGORÍA ═══
 - SIEMPRE rellena la categoría. Nunca vacío.
