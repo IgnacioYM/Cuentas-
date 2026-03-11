@@ -5,16 +5,14 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ─── Helpers para facturas ────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Convierte DD/MM/YYYY → YYYY-MM-DD para Supabase
 const toISO = (d) => {
   if (!d) return null;
   const [day, mon, yr] = d.split("/");
   return `${yr}-${mon}-${day}`;
 };
 
-// Convierte YYYY-MM-DD → DD/MM/YYYY para la app
 const fromISO = (d) => {
   if (!d) return "";
   const [yr, mon, day] = d.split("-");
@@ -52,9 +50,10 @@ const fromRow = (row) => ({
   otros: row.otros ? parseFloat(row.otros) : null,
   comentario: row.comentario || "",
   notas: row.notas_ia || "",
+  archivo_origen: row.archivo_origen || "",
 });
 
-// ─── CRUD ─────────────────────────────────────────────────────────────────────
+// ─── Facturas CRUD ────────────────────────────────────────────────────────────
 
 export async function fetchInvoices() {
   const { data, error } = await supabase
@@ -75,6 +74,17 @@ export async function upsertInvoices(invoices) {
   return data.map(fromRow);
 }
 
+export async function updateSingleInvoice(inv) {
+  const row = toRow(inv);
+  const { data, error } = await supabase
+    .from("facturas")
+    .update(row)
+    .eq("id", inv.id)
+    .select();
+  if (error) { console.error("Supabase update error:", error); return null; }
+  return data.length > 0 ? fromRow(data[0]) : null;
+}
+
 export async function deleteInvoice(id) {
   const { error } = await supabase
     .from("facturas")
@@ -88,7 +98,7 @@ export async function deleteAllInvoices() {
   const { error } = await supabase
     .from("facturas")
     .delete()
-    .neq("id", "00000000-0000-0000-0000-000000000000"); // delete all
+    .neq("id", "00000000-0000-0000-0000-000000000000");
   if (error) { console.error("Supabase delete all error:", error); return false; }
   return true;
 }
@@ -127,4 +137,67 @@ export async function upsertGastosFinancieros(entries) {
     .upsert(rows, { onConflict: "id" });
   if (error) { console.error("Supabase GF upsert error:", error); return false; }
   return true;
+}
+
+// ─── Escrituras ───────────────────────────────────────────────────────────────
+
+export async function fetchEscrituras() {
+  const { data, error } = await supabase
+    .from("escrituras")
+    .select("*")
+    .order("fecha_firma", { ascending: true });
+  if (error) { console.error("Supabase escrituras fetch error:", error); return null; }
+  return data.map(row => ({
+    id: row.id,
+    activo: row.activo,
+    tipo: row.tipo,
+    fecha_firma: fromISO(row.fecha_firma),
+    notaria: row.notaria || "",
+    protocolo: row.protocolo || "",
+    precio: parseFloat(row.precio_escritura) || 0,
+    datos_extra: row.datos_extra || {},
+    archivo_origen: row.archivo_origen || "",
+  }));
+}
+
+export async function updateEscritura(esc) {
+  const { data, error } = await supabase
+    .from("escrituras")
+    .update({
+      activo: esc.activo,
+      tipo: esc.tipo,
+      fecha_firma: toISO(esc.fecha_firma),
+      notaria: esc.notaria,
+      protocolo: esc.protocolo,
+      precio_escritura: esc.precio,
+      datos_extra: esc.datos_extra,
+      archivo_origen: esc.archivo_origen || null,
+    })
+    .eq("id", esc.id)
+    .select();
+  if (error) { console.error("Supabase escritura update error:", error); return null; }
+  return data.length > 0 ? data[0] : null;
+}
+
+// ─── File Storage (bucket: documentos) ────────────────────────────────────────
+
+export async function uploadFile(file, path) {
+  // path example: "facturas/2025-10/factura_arena_am.pdf"
+  const { data, error } = await supabase.storage
+    .from("documentos")
+    .upload(path, file, {
+      cacheControl: "3600",
+      upsert: true,
+    });
+  if (error) { console.error("Storage upload error:", error); return null; }
+  return data.path;
+}
+
+export async function getSignedUrl(path) {
+  if (!path) return null;
+  const { data, error } = await supabase.storage
+    .from("documentos")
+    .createSignedUrl(path, 3600); // 1 hour
+  if (error) { console.error("Storage signed URL error:", error); return null; }
+  return data.signedUrl;
 }
