@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, fetchGastosFinancieros, upsertGastosFinancieros } from "./supabaseClient";
+import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, uploadFile, getSignedUrl } from "./supabaseClient";
 import DashboardTab from "./DashboardTab";
 import { ESCRITURAS } from "./escrituras";
 
@@ -231,6 +231,15 @@ PEDRO FERNÁNDEZ / PEDRO FERNÁNDEZ CASTAÑO:
 - Si hay suplidos, papel timbrado, base no sujeta → sumar en "cuantia"
 - Para ESCRITURAS: cuantia = precio compraventa, iva = 0, otros = 0
 
+═══ IVA INCLUIDO ═══
+- Si la factura indica "IVA incluido", "IVA incl.", "IGIC incluido", o si NO desglosa base e IVA por separado pero el total incluye impuestos:
+  · Calcular la base: base = total / (1 + tipo_iva/100)
+  · El IVA más habitual es 21%. Ejemplo: Total 605€ IVA incl. → base = 605 / 1.21 = 500€, iva = 105€
+  · Si es IVA 10%: base = total / 1.10
+  · Si es IVA 4%: base = total / 1.04
+- Si la factura SÍ desglosa base e IVA por separado, usar los importes desglosados directamente.
+- NUNCA poner el total con IVA incluido como "cuantia" y dejar iva = 0. Siempre desglosar.
+
 ═══ CATEGORÍA ═══
 - SIEMPRE rellena la categoría. Nunca vacío.
 - Notarías de compraventa → "Adquisición (incluye gastos e impuestos)" siempre.
@@ -323,6 +332,18 @@ const validateInvoice = (inv, filename) => {
   if (concepto.includes("compraventa") && (v.cuantia||0) >= 100000) {
     v.categoria = "Adquisición (incluye gastos e impuestos)";
     v.iva = 0; v.otros = 0;
+  }
+
+  // 15. IVA INCLUIDO — si cuantia > 0 y iva = 0 y el proveedor normalmente lleva IVA, avisar
+  // Proveedores que SIEMPRE llevan IVA: Arena AM, notarías, abogados, detective, correos, ferretería, arquitecto
+  const shouldHaveIVA = prov.includes("arena asset") || prov.includes("arena am") || prov.includes("notari") ||
+    prov.includes("barrios") || prov.includes("ramos ortiz") || prov.includes("cuenca") || prov.includes("ricardo ruiz") ||
+    prov.includes("correos") || prov.includes("ferret") || prov.includes("central de san mag") || prov.includes("llabrés") || prov.includes("llabres");
+  if (shouldHaveIVA && (v.cuantia||0) > 0 && (v.iva||0) === 0) {
+    // Posible IVA incluido — no corregimos automáticamente pero dejamos nota
+    if (!v.notas || !v.notas.includes("IVA")) {
+      v.notas = (v.notas ? v.notas + ". " : "") + "Revisar: IVA podría estar incluido en cuantía";
+    }
   }
 
   return v;
@@ -534,6 +555,12 @@ export default function App() {
   const totalPct = splits.reduce((a,s)=>a+(s.pct||0), 0);
   const splitValid = splits.every(s=>s.activo) && Math.abs(totalPct-100)<0.01;
   const invoicesRef = useRef([]);
+  // Edit mode
+  const [editMode, setEditMode]     = useState(false);
+  const [editingId, setEditingId]   = useState(null);
+  const [editDraft, setEditDraft]   = useState(null);
+  // Escrituras from Supabase
+  const [escriturasDB, setEscriturasDB] = useState([]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -548,6 +575,9 @@ export default function App() {
         const sbEntries = await fetchGastosFinancieros();
         if (sbEntries && sbEntries.length > 0) { setEntries(sbEntries); }
         else { const e = localStorage.getItem("gf-entries-arena-nexus"); if (e) setEntries(JSON.parse(e)); }
+        // Load escrituras from Supabase
+        const sbEsc = await fetchEscrituras();
+        if (sbEsc && sbEsc.length > 0) setEscriturasDB(sbEsc);
       } catch {
         try {
           const e = localStorage.getItem("gf-entries-arena-nexus"); if (e) setEntries(JSON.parse(e));
@@ -632,14 +662,23 @@ export default function App() {
       if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 3000));
     }
     const autoSaved = [], needsReview = [], errors = [];
-    results.forEach(({ result, fd }) => {
+    for (const { result, fd } of results) {
       if (result.status === "fulfilled" && result.value) {
-        const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "" };
+        // Upload PDF to Supabase Storage
+        let archivoPath = "";
+        try {
+          const datePrefix = new Date().toISOString().slice(0,7); // "2025-10"
+          const safeName = fd.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          archivoPath = `facturas/${datePrefix}/${safeName}`;
+          await uploadFile(fd.file, archivoPath);
+        } catch { archivoPath = ""; }
+
+        const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "", archivo_origen: archivoPath };
         const hasDoubt = !inv.activo || (inv.notas && inv.notas.trim() !== "");
         if (hasDoubt) needsReview.push({ ...inv, _file: fd.file });
         else autoSaved.push({ ...inv, id: crypto.randomUUID() });
       } else errors.push(fd.name + ": " + (result.reason||"error"));
-    });
+    }
     if (autoSaved.length) addInvoices(autoSaved);
     setAnalyzing(false); setProgress({ current:0, total:0 }); setPdfFiles([]);
     if (errors.length) showFlash(`⚠ ${errors.length} error(es): ${errors[0]}`, "err");
@@ -712,24 +751,64 @@ export default function App() {
   const cats    = ["Todas",...Object.keys(CAT_COLORS)];
   const filtered = filterCat==="Todas" ? entries : entries.filter(e=>e.cat===filterCat);
 
+  // Build escrituras map from DB (with fallback to static file)
+  const escriturasMap = {};
+  if (escriturasDB.length > 0) {
+    escriturasDB.forEach(e => { escriturasMap[e.activo] = e; });
+  } else {
+    Object.entries(ESCRITURAS).forEach(([code, e]) => {
+      escriturasMap[code] = { id: `esc-static-${code}`, activo: code, tipo: "compraventa", fecha_firma: e.fecha_firma, notaria: e.notaria, protocolo: e.protocolo, precio: e.precio, datos_extra: {}, archivo_origen: "" };
+    });
+  }
+
   // Base de datos: all movements merged
   const allMovements = (() => {
     const m = [];
-    Object.entries(ESCRITURAS).forEach(([code, esc]) => {
-      m.push({ id:`esc-${code}`, fecha:esc.fecha_firma, tipo:"Escritura", proveedor:esc.vendedor,
-        concepto:`Compraventa ${esc.nombre}`, activo:code, categoria:"Adquisición (incluye gastos e impuestos)",
-        cuantia:esc.precio, iva:0, otros:0 });
+    Object.values(escriturasMap).forEach(esc => {
+      const nombre = ESCRITURAS[esc.activo]?.nombre || esc.activo;
+      m.push({ id: esc.id || `esc-${esc.activo}`, fecha: esc.fecha_firma, tipo: "Escritura", proveedor: esc.datos_extra?.vendedora || ESCRITURAS[esc.activo]?.vendedor || "", concepto: `Compraventa ${nombre}`, activo: esc.activo, categoria: "Adquisición (incluye gastos e impuestos)", cuantia: esc.precio, iva: 0, otros: 0, archivo_origen: esc.archivo_origen || "" });
     });
     invoices.forEach(inv => {
-      m.push({ id:inv.id, fecha:inv.fecha, tipo:"Factura", proveedor:inv.proveedor, concepto:inv.concepto,
-        activo:inv.activo, categoria:inv.categoria, cuantia:inv.cuantia||0, iva:inv.iva||0, otros:inv.otros||0 });
+      m.push({ id: inv.id, fecha: inv.fecha, tipo: "Factura", proveedor: inv.proveedor, concepto: inv.concepto, activo: inv.activo, categoria: inv.categoria, cuantia: inv.cuantia||0, iva: inv.iva||0, otros: inv.otros||0, archivo_origen: inv.archivo_origen || "" });
     });
     entries.forEach(e => {
-      m.push({ id:e.id, fecha:e.date, tipo:"G. Financiero", proveedor:e.account==="CC"?"Cuenta Corriente":"Póliza Crédito",
-        concepto:e.concept, activo:"AN", categoria:e.cat, cuantia:Math.abs(e.amount), iva:0, otros:0 });
+      m.push({ id: e.id, fecha: e.date, tipo: "G. Financiero", proveedor: e.account==="CC"?"Cuenta Corriente":"Póliza Crédito", concepto: e.concept, activo: "AN", categoria: e.cat, cuantia: Math.abs(e.amount), iva: 0, otros: 0, archivo_origen: "" });
     });
     return m.sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
   })();
+
+  // ── Edit helpers ──
+  const startEdit = (mov) => {
+    setEditingId(mov.id);
+    setEditDraft({ ...mov });
+  };
+  const cancelEdit = () => { setEditingId(null); setEditDraft(null); };
+  const saveEdit = async () => {
+    if (!editDraft) return;
+    // Update in the correct store based on type
+    const updated = invoices.map(inv => inv.id === editDraft.id ? { ...inv, fecha: editDraft.fecha, proveedor: editDraft.proveedor, concepto: editDraft.concepto, activo: editDraft.activo, categoria: editDraft.categoria, cuantia: parseFloat(editDraft.cuantia)||0, iva: parseFloat(editDraft.iva)||0, otros: editDraft.otros ? parseFloat(editDraft.otros) : null } : inv);
+    invoicesRef.current = updated;
+    setInvoices(updated);
+    // Sync single invoice to Supabase
+    const target = updated.find(inv => inv.id === editDraft.id);
+    if (target) updateSingleInvoice(target).catch(() => {});
+    showFlash("Guardado.");
+    cancelEdit();
+  };
+  const addManualRow = () => {
+    const newInv = { id: crypto.randomUUID(), fecha: new Date().toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"}), proveedor: "", concepto: "", activo: "", categoria: "", cuantia: 0, iva: 0, otros: null, numero: "", comentario: "", notas: "", archivo_origen: "" };
+    const merged = [...invoicesRef.current, newInv];
+    invoicesRef.current = merged;
+    setInvoices(merged);
+    startEdit(newInv);
+    showFlash("Nueva fila añadida — rellena los campos.", "warn");
+  };
+  const openDoc = async (path) => {
+    if (!path) { showFlash("Sin documento adjunto.", "warn"); return; }
+    const url = await getSignedUrl(path);
+    if (url) window.open(url, "_blank");
+    else showFlash("Error al obtener el documento.", "err");
+  };
 
   // Facturas para IVA/IRPF — with quarter filtering
   const allFacturasIVA = invoices.filter(inv => (inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim()));
@@ -867,6 +946,8 @@ export default function App() {
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
             <div style={{ fontSize:13, color:"#64748b" }}>{allMovements.length} movimientos totales</div>
             <div style={{ display:"flex", gap:8 }}>
+              {editMode && <button onClick={addManualRow} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>＋ Añadir fila</button>}
+              <button onClick={()=>{ setEditMode(v=>!v); cancelEdit(); }} style={{ background:editMode?"#1e3a5f":"transparent", border:`1px solid ${editMode?"#3b82f6":"#1e3a5f"}`, color:editMode?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{editMode?"✓ Salir de edición":"✏ Editar"}</button>
               <button onClick={exportCSV} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Exportar CSV</button>
               {!confirmBorrarTodo
                 ? <button onClick={()=>setConfirmBorrarTodo(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar facturas</button>
@@ -880,13 +961,40 @@ export default function App() {
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead><tr style={{ background:"#0d1f35" }}>
-                {["Fecha","Período","Tipo","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total",""].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                {["Fecha","Período","Tipo","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total","Doc",""].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
               </tr></thead>
               <tbody>
                 {allMovements.map((mov,i) => {
                   const t = (mov.cuantia||0)+(mov.iva||0)+(mov.otros||0);
                   const tc = mov.tipo==="Escritura"?"#4ade80":mov.tipo==="G. Financiero"?"#8b5cf6":"#60a5fa";
-                  return <tr key={mov.id+"-"+i} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
+                  const isEditing = editingId === mov.id && mov.tipo === "Factura";
+
+                  if (isEditing && editDraft) {
+                    // ── Editing row ──
+                    const ed = editDraft;
+                    const etotal = (parseFloat(ed.cuantia)||0)+(parseFloat(ed.iva)||0)+(ed.otros?parseFloat(ed.otros):0);
+                    return <tr key={mov.id+"-edit"} style={{ background:"#0d1f35" }}>
+                      <td style={{ padding:"4px 6px" }}><input value={ed.fecha||""} onChange={e=>setEditDraft(d=>({...d,fecha:e.target.value}))} style={{ width:80, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(ed.fecha)}</span></td>
+                      <td style={{ padding:"4px 6px" }}><span style={{ color:"#60a5fa", fontSize:10 }}>Factura</span></td>
+                      <td style={{ padding:"4px 6px" }}><input value={ed.proveedor||""} onChange={e=>setEditDraft(d=>({...d,proveedor:e.target.value}))} style={{ width:120, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><input value={ed.concepto||""} onChange={e=>setEditDraft(d=>({...d,concepto:e.target.value}))} style={{ width:140, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><select value={ed.activo||""} onChange={e=>setEditDraft(d=>({...d,activo:e.target.value}))} style={{ background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select></td>
+                      <td style={{ padding:"4px 6px" }}><select value={ed.categoria||""} onChange={e=>setEditDraft(d=>({...d,categoria:e.target.value}))} style={{ width:120, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 4px", fontFamily:"inherit", fontSize:11, outline:"none" }}><option value="">—</option>{CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
+                      <td style={{ padding:"4px 6px" }}><input type="number" value={ed.cuantia||""} onChange={e=>setEditDraft(d=>({...d,cuantia:e.target.value}))} style={{ width:70, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><input type="number" value={ed.iva||""} onChange={e=>setEditDraft(d=>({...d,iva:e.target.value}))} style={{ width:60, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><input type="number" value={ed.otros||""} onChange={e=>setEditDraft(d=>({...d,otros:e.target.value}))} style={{ width:60, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                      <td style={{ padding:"4px 6px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt(etotal)}</td>
+                      <td style={{ padding:"4px 6px" }}></td>
+                      <td style={{ padding:"4px 6px", whiteSpace:"nowrap" }}>
+                        <button onClick={saveEdit} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"2px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginRight:4 }}>✓</button>
+                        <button onClick={cancelEdit} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"2px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕</button>
+                      </td>
+                    </tr>;
+                  }
+
+                  // ── Normal row ──
+                  return <tr key={mov.id+"-"+i} style={{ background:i%2===0?"#0a1628":"#080f1a", cursor:editMode&&mov.tipo==="Factura"?"pointer":"default" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"} onClick={()=>{ if(editMode && mov.tipo==="Factura" && editingId!==mov.id) startEdit(mov); }}>
                     <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{mov.fecha}</td>
                     <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(mov.fecha)}</span></td>
                     <td style={{ padding:"8px 10px" }}><span style={{ background:`${tc}15`, color:tc, border:`1px solid ${tc}30`, padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{mov.tipo}</span></td>
@@ -899,9 +1007,14 @@ export default function App() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:mov.otros?"#f59e0b":"#334155" }}>{mov.otros?fmt(mov.otros):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt(t)}</td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
-                      {mov.tipo==="Factura" && (delConfirm===mov.id
+                      {mov.archivo_origen
+                        ? <button onClick={(e)=>{e.stopPropagation();openDoc(mov.archivo_origen)}} title="Ver documento" style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button>
+                        : <span style={{ color:"#1e3a5f", fontSize:11 }}>—</span>}
+                    </td>
+                    <td style={{ padding:"8px 6px", textAlign:"center" }}>
+                      {mov.tipo==="Factura" && !editMode && (delConfirm===mov.id
                         ? <span><button onClick={()=>{ const u=invoices.filter(x=>x.id!==mov.id); invoicesRef.current=u; setInvoices(u); deleteInvoice(mov.id).catch(()=>{}); setDelConfirm(null); showFlash("Eliminada.","warn"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"2px 7px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginRight:4 }}>Sí</button><button onClick={()=>setDelConfirm(null)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"2px 7px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>No</button></span>
-                        : <button onClick={()=>setDelConfirm(mov.id)} style={{ background:"transparent", border:"none", color:"#334155", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>)}
+                        : <button onClick={(e)=>{e.stopPropagation();setDelConfirm(mov.id)}} style={{ background:"transparent", border:"none", color:"#334155", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>)}
                     </td>
                   </tr>;
                 })}
