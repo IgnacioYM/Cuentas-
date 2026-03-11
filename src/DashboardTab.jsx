@@ -64,10 +64,13 @@ function computeData(invoices) {
     totalGeneral += anData[c] || 0;
   });
 
-  // Asset totals
+  // Asset totals — include escritura price in Adquisición
   const assetData = {};
+  const ADQ_CAT = "Adquisición (incluye gastos e impuestos)";
   Object.keys(ESCRITURAS).forEach((code) => {
-    const data = byActivo[code] || {};
+    const data = { ...(byActivo[code] || {}) };
+    // Add purchase price from escritura to Adquisición
+    data[ADQ_CAT] = (data[ADQ_CAT] || 0) + ESCRITURAS[code].precio;
     let assetTotal = 0;
     CAT_ACTIVOS.forEach((c) => {
       assetTotal += data[c] || 0;
@@ -83,6 +86,8 @@ function computeData(invoices) {
     const total = (inv.cuantia || 0) + (inv.iva || 0) + (inv.otros || 0);
     summaryByCat[cat] = (summaryByCat[cat] || 0) + total;
   });
+  // Add escritura prices to Adquisición summary
+  summaryByCat[ADQ_CAT] = (summaryByCat[ADQ_CAT] || 0) + TOTAL_PRECIO_ADQUISICION;
 
   return {
     anData,
@@ -238,7 +243,7 @@ function AssetCard({ code, data, escritura }) {
           <span>Gastos s/ precio</span>
           <span style={{ color: precio ? "#64748b" : "#334155" }}>
             {precio
-              ? `${(((total - precio) / precio) * 100).toFixed(1)}%`
+              ? `+${fmt2(total - precio)} (${(((total - precio) / precio) * 100).toFixed(1)}%)`
               : "–"}
           </span>
         </div>
@@ -261,8 +266,6 @@ export default function DashboardTab({ invoices = [] }) {
   const d = computeData(invoices);
 
   const totalPrecioAdq = TOTAL_PRECIO_ADQUISICION;
-  const gastosAdq =
-    d.summaryByCat["Adquisición (incluye gastos e impuestos)"] || 0;
   const totalPosesion = d.summaryByCat["Costes de posesión"] || 0;
   const totalLegal = d.summaryByCat["Costes legales"] || 0;
   const totalCapex = d.summaryByCat["Capex"] || 0;
@@ -416,21 +419,26 @@ export default function DashboardTab({ invoices = [] }) {
                 Totales consolidados
               </div>
               <CatRow
-                label="Precio adquisición"
-                value={totalPrecioAdq}
-                dimIfZero={false}
-              />
-              <CatRow
-                label="Gastos adquisición"
-                value={gastosAdq - totalPrecioAdq > 0 ? gastosAdq - totalPrecioAdq : gastosAdq}
+                label="Adquisición (inc. precio)"
+                value={d.summaryByCat["Adquisición (incluye gastos e impuestos)"] || 0}
                 dimIfZero={false}
               />
               <CatRow label="Costes legales" value={totalLegal} dimIfZero={false} />
               <CatRow label="Capex" value={totalCapex} dimIfZero={false} />
               <CatRow label="Costes posesión" value={totalPosesion} dimIfZero={false} />
               <CatRow
-                label="Implementación + Opex + Gestión"
-                value={d.totalGeneral}
+                label="Implementación"
+                value={d.summaryByCat["Costes de implementación (SPV, abogados, etc.)"] || 0}
+                dimIfZero={false}
+              />
+              <CatRow
+                label="Opex"
+                value={d.summaryByCat["Opex"] || 0}
+                dimIfZero={false}
+              />
+              <CatRow
+                label="Comisión gestión"
+                value={d.summaryByCat["Comisión de gestión"] || 0}
                 dimIfZero={false}
               />
               <div
