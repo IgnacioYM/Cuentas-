@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
+import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, fetchGastosFinancieros, upsertGastosFinancieros } from "./supabaseClient";
 
 // ─── Clasificación Gastos Financieros ─────────────────────────────────────────
 const RULES = [
@@ -155,7 +156,7 @@ NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIO
     · ~165.000€ → E65
     · ~179.000€ → M1
     · ~279.650€ → AG55
-    ·Valor muy alto (ej: ~623.650€ = varios inmuebles) → dejar activo VACÍO, notas: "CV múltiples inmuebles — repartir entre E65, M1 y AG55 con split"
+    · Valor muy alto (ej: ~623.650€ = varios inmuebles Madrid) → E65, notas: "CV múltiples inmuebles Madrid"
 - cuantia = Base Imponible + Base no Sujeta (suplidos: papel timbrado, sellos seguridad, timbres)
   EJEMPLO REAL: BI=1.296,85€ + suplidos (7,95+0,15+0,15)=8,25€ → cuantia = 1.296,85 + 8,25 = 1.305,10€
   Suma cada céntimo. Comprueba que cuantia + iva + otros = Total Factura.
@@ -199,13 +200,11 @@ PEDRO FERNÁNDEZ / PEDRO FERNÁNDEZ CASTAÑO:
 - IMPORTANTE: puede ser un acuerdo firmado, no factura estándar. Procesarlo igual.
 
 ═══ EXTRACCIÓN DE IMPORTES ═══
-- "cuantia" = Base Imponible + Base no Sujeta (suplidos, papel timbrado, sellos). Es el importe total ANTES de IVA e IRPF.
-- "iva" = el importe de IVA que aparece en la factura. Se calcula sobre la Base Imponible SOLAMENTE (no sobre suplidos/base no sujeta).
-- "otros" = retención IRPF como número NEGATIVO. Se calcula sobre la Base Imponible SOLAMENTE. Es estándar, no mencionarlo en notas.
-- EJEMPLO NOTARÍA: BI=1.296,85 + suplidos=8,25 → cuantia=1.305,10 | IVA=21% de 1.296,85=272,34 | IRPF=15% de 1.296,85=-194,53 | Total=1.382,91
-- Si hay suplidos, papel timbrado, base no sujeta, base exenta → sumar TODOS en "cuantia"
-- Si NO hay Base no Sujeta → cuantia = Base Imponible directamente
-- VERIFICACIÓN: Total factura = cuantia + iva + otros. Si no cuadra, revisa.
+- "cuantia" = Base Imponible + Base no Sujeta + suplidos. TODO antes de IVA y retención.
+  Suma cada línea con PRECISIÓN. Verifica: cuantia + iva + otros = Total Factura.
+- "iva" = importe total de IVA
+- "otros" = retención IRPF como número NEGATIVO (ej: -194.53). Es estándar, no mencionarlo en notas.
+- Si hay suplidos, papel timbrado, base no sujeta → sumar en "cuantia"
 
 ═══ CATEGORÍA ═══
 - SIEMPRE rellena la categoría. Nunca vacío.
@@ -421,23 +420,51 @@ export default function App() {
   const invoicesRef = useRef([]);
 
   useEffect(() => {
-    try {
-      const e = localStorage.getItem("gf-entries-arena-nexus"); if (e) setEntries(JSON.parse(e));
-      const i = localStorage.getItem("gf-invoices-arena-nexus"); if (i) { const parsed = JSON.parse(i); setInvoices(parsed); invoicesRef.current = parsed; }
+    const loadData = async () => {
+      try {
+        // Try Supabase first
+        const sbInvoices = await fetchInvoices();
+        if (sbInvoices && sbInvoices.length > 0) {
+          setInvoices(sbInvoices);
+          invoicesRef.current = sbInvoices;
+        } else {
+          // Fallback to localStorage
+          const i = localStorage.getItem("gf-invoices-arena-nexus");
+          if (i) { const parsed = JSON.parse(i); setInvoices(parsed); invoicesRef.current = parsed; }
+        }
+
+        const sbEntries = await fetchGastosFinancieros();
+        if (sbEntries && sbEntries.length > 0) {
+          setEntries(sbEntries);
+        } else {
+          const e = localStorage.getItem("gf-entries-arena-nexus");
+          if (e) setEntries(JSON.parse(e));
+        }
+      } catch {
+        // Full fallback to localStorage
+        try {
+          const e = localStorage.getItem("gf-entries-arena-nexus"); if (e) setEntries(JSON.parse(e));
+          const i = localStorage.getItem("gf-invoices-arena-nexus"); if (i) { const parsed = JSON.parse(i); setInvoices(parsed); invoicesRef.current = parsed; }
+        } catch {}
+      }
       const k = localStorage.getItem("gf-api-key"); if (k) setApiKey(k);
-    } catch {}
-    setLoaded(true);
+      setLoaded(true);
+    };
+    loadData();
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
     try { localStorage.setItem("gf-entries-arena-nexus", JSON.stringify(entries)); } catch {}
+    // Sync to Supabase in background
+    if (entries.length > 0) upsertGastosFinancieros(entries).catch(() => {});
   }, [entries, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
-    // Solo persistir, no actualizar el ref aquí (se actualiza síncronamente en addInvoices)
     try { localStorage.setItem("gf-invoices-arena-nexus", JSON.stringify(invoices)); } catch {}
+    // Sync to Supabase in background
+    if (invoices.length > 0) upsertInvoices(invoices).catch(() => {});
   }, [invoices, loaded]);
 
   const showFlash = (msg, type="ok") => { setFlash({msg,type}); setTimeout(()=>setFlash(null),3500); };
@@ -519,7 +546,7 @@ export default function App() {
     })));
 
     // Lotes de 3 con pausa entre lotes para no saturar
-    const BATCH = 2;
+    const BATCH = 3;
     const results = [];
     for (let i=0; i<fileData.length; i+=BATCH) {
       const batch = fileData.slice(i, i+BATCH);
@@ -528,7 +555,7 @@ export default function App() {
       );
       batchResults.forEach((r, j) => results.push({ result: r.status==="fulfilled" ? {status:"fulfilled",value:r.value} : {status:"rejected",reason:r.reason?.message}, fd: batch[j] }));
       setProgress({ current: Math.min(i+BATCH, fileData.length), total: fileData.length });
-      if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 2500));
+      if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 1000));
     }
 
     const autoSaved = [];
@@ -539,7 +566,7 @@ export default function App() {
         const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "" };
         const hasDoubt = !inv.activo || (inv.notas && inv.notas.trim() !== "");
         if (hasDoubt) needsReview.push({ ...inv, _file: fd.file });
-        else autoSaved.push({ ...inv, id: `inv-${Date.now()}-${Math.random()}` });
+        else autoSaved.push({ ...inv, id: crypto.randomUUID() });
       } else {
         errors.push(fd.name + ": " + (result.reason||"error"));
       }
@@ -587,7 +614,7 @@ export default function App() {
       if (!splitValid) { showFlash("Los % deben sumar 100% y todos los activos seleccionados.","err"); return; }
       const newInvs = splits.map((s,i) => ({
         ...draft, _file: undefined,
-        id: `inv-${Date.now()}-${i}-${Math.random()}`,
+        id: crypto.randomUUID(),
         activo: s.activo,
         numero: draft.numero ? `${draft.numero}-${i+1}` : "",
         cuantia: parseFloat(((s.pct/100)*(draft.cuantia||0)).toFixed(2)),
@@ -599,7 +626,7 @@ export default function App() {
     } else {
       if (!draft.activo) { showFlash("Selecciona el activo.","err"); return; }
       const { _file, ...inv } = draft;
-      addInvoices([{ ...inv, id: `inv-${Date.now()}-${Math.random()}` }]);
+      addInvoices([{ ...inv, id: crypto.randomUUID() }]);
     }
     if (reviewQueue.length - reviewIdx - 1 === 0) showFlash("✓ Todas las facturas procesadas.");
     advanceReview();
@@ -882,7 +909,7 @@ export default function App() {
                         </button>
                       : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
                           <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro?</span>
-                          <button onClick={()=>{ setInvoices([]); invoicesRef.current=[]; setConfirmBorrarTodo(false); showFlash("Todas las facturas eliminadas.","err"); }}
+                          <button onClick={()=>{ setInvoices([]); invoicesRef.current=[]; deleteAllInvoices().catch(() => {}); setConfirmBorrarTodo(false); showFlash("Todas las facturas eliminadas.","err"); }}
                             style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
                           <button onClick={()=>setConfirmBorrarTodo(false)}
                             style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
@@ -923,6 +950,7 @@ export default function App() {
                                     const updated = invoices.filter(x=>x.id!==inv.id);
                                     invoicesRef.current = updated;
                                     setInvoices(updated);
+                                    deleteInvoice(inv.id).catch(() => {});
                                     setDelConfirm(null); 
                                     showFlash("Eliminada.","warn"); 
                                   }}
