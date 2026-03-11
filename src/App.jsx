@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, fetchGastosFinancieros, upsertGastosFinancieros } from "./supabaseClient";
+import DashboardTab from "./DashboardTab";
 
 // ─── Clasificación Gastos Financieros ─────────────────────────────────────────
 const RULES = [
@@ -801,7 +802,7 @@ export default function App() {
     </div>
   );
 
-  const TABS = [["facturas","🧾 Facturas"],["gf-tabla","📋 G. Financieros"],["gf-resumen","📊 Resumen"],["gf-importar","⬆ Importar"]];
+  const TABS = [["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["gf-tabla","📋 G. Financieros"],["gf-resumen","📊 Resumen"],["gf-importar","⬆ Importar"]];
 
   return (
     <div style={{ background:"#080f1a", minHeight:"100vh", fontFamily:"'DM Mono','Fira Code',monospace", color:"#e2e8f0" }}>
@@ -1079,6 +1080,11 @@ export default function App() {
               </div>
             )}
           </div>
+        )}
+
+        {/* ══ DASHBOARD ══ */}
+        {tab==="dashboard" && (
+          <DashboardTab invoices={invoices} />
         )}
 
         {/* ══ GF TABLA ══ */}
