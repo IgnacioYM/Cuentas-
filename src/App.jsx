@@ -340,6 +340,15 @@ const invoiceKey = inv => {
   return `${fecha}|${prov}|${cuantia}|${iva}`;
 };
 
+// DD/MM/YYYY → "1T25", "2T25", etc.
+const getQuarter = (fecha) => {
+  if (!fecha) return "";
+  const [,mon,yr] = fecha.split("/");
+  const m = parseInt(mon, 10);
+  const q = m <= 3 ? 1 : m <= 6 ? 2 : m <= 9 ? 3 : 4;
+  return `${q}T${(yr||"").slice(-2)}`;
+};
+
 // ─── Componentes pequeños ─────────────────────────────────────────────────────
 function DropZone({ label, name, onFile, file }) {
   const [drag, setDrag] = useState(false);
@@ -510,6 +519,7 @@ export default function App() {
   const [confirmBorrarTodo, setConfirmBorrarTodo] = useState(false);
   const [loaded, setLoaded]         = useState(false);
   const [filterCat, setFilterCat]   = useState("Todas");
+  const [filterQ, setFilterQ]       = useState("Todos");
   const [importing, setImporting]   = useState(false);
   const [apiKey, setApiKey]         = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
@@ -721,8 +731,10 @@ export default function App() {
     return m.sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
   })();
 
-  // Facturas para IVA/IRPF
-  const facturasIVA = invoices.filter(inv => (inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim()));
+  // Facturas para IVA/IRPF — with quarter filtering
+  const allFacturasIVA = invoices.filter(inv => (inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim()));
+  const quarters = [...new Set(allFacturasIVA.map(inv => getQuarter(inv.fecha)).filter(Boolean))].sort();
+  const facturasIVA = filterQ === "Todos" ? allFacturasIVA : allFacturasIVA.filter(inv => getQuarter(inv.fecha) === filterQ);
   const totalBaseIVA = facturasIVA.reduce((s,inv) => s+(inv.cuantia||0), 0);
   const totalIVASop = facturasIVA.reduce((s,inv) => s+(inv.iva||0), 0);
   const totalRet = facturasIVA.reduce((s,inv) => s+(inv.otros||0), 0);
@@ -868,7 +880,7 @@ export default function App() {
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead><tr style={{ background:"#0d1f35" }}>
-                {["Fecha","Tipo","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total",""].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                {["Fecha","Período","Tipo","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total",""].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
               </tr></thead>
               <tbody>
                 {allMovements.map((mov,i) => {
@@ -876,6 +888,7 @@ export default function App() {
                   const tc = mov.tipo==="Escritura"?"#4ade80":mov.tipo==="G. Financiero"?"#8b5cf6":"#60a5fa";
                   return <tr key={mov.id+"-"+i} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
                     <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{mov.fecha}</td>
+                    <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(mov.fecha)}</span></td>
                     <td style={{ padding:"8px 10px" }}><span style={{ background:`${tc}15`, color:tc, border:`1px solid ${tc}30`, padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{mov.tipo}</span></td>
                     <td style={{ padding:"8px 10px", color:"#cbd5e1", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{mov.proveedor}</td>
                     <td style={{ padding:"8px 10px", color:"#94a3b8", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{mov.concepto}</td>
@@ -899,6 +912,10 @@ export default function App() {
 
         {/* ══ FACTURAS IVA/IRPF ══ */}
         {tab==="facturas" && <div>
+          {/* Quarter filter */}
+          <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap" }}>
+            {["Todos", ...quarters].map(q => <button key={q} onClick={()=>setFilterQ(q)} style={{ background:filterQ===q?"#1e3a5f":"transparent", border:`1px solid ${filterQ===q?"#3b82f6":"#1e3a5f"}`, color:filterQ===q?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:filterQ===q?600:400 }}>{q}</button>)}
+          </div>
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:20 }}>
             {[["Base imponible",totalBaseIVA,"#60a5fa"],["IVA soportado",totalIVASop,"#fbbf24"],["Retenciones",totalRet,"#f59e0b"],["Neto",totalBaseIVA+totalIVASop+totalRet,"#f87171"]].map(([l,v,c]) =>
               <div key={l} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"12px 18px", flex:"1 1 160px", minWidth:140 }}>
@@ -906,16 +923,17 @@ export default function App() {
                 <div style={{ fontSize:18, fontWeight:700, color:c }}>{fmt(v)}</div>
               </div>)}
           </div>
-          <div style={{ fontSize:12, color:"#475569", marginBottom:12 }}>{facturasIVA.length} facturas con IVA y/o retención</div>
+          <div style={{ fontSize:12, color:"#475569", marginBottom:12 }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead><tr style={{ background:"#0d1f35" }}>
-                {["Nº","Fecha","Proveedor","Concepto","Activo","Categoría","Base","IVA","Retención","Total"].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Base","IVA","Retención","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                {["Nº","Fecha","Período","Proveedor","Concepto","Activo","Categoría","Base","IVA","Retención","Total"].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Base","IVA","Retención","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
               </tr></thead>
               <tbody>
                 {facturasIVA.map((inv,i) => <tr key={inv.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
                   <td style={{ padding:"8px 10px", color:"#475569", fontSize:11, whiteSpace:"nowrap" }}>{inv.numero||"—"}</td>
                   <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{inv.fecha}</td>
+                  <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(inv.fecha)}</span></td>
                   <td style={{ padding:"8px 10px", color:"#cbd5e1", maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.proveedor}</td>
                   <td style={{ padding:"8px 10px", color:"#94a3b8", maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.concepto}</td>
                   <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#60a5fa", padding:"2px 7px", borderRadius:4, fontSize:11, fontWeight:700 }}>{inv.activo}</span></td>
