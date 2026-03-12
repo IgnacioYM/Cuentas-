@@ -430,6 +430,51 @@ function Field({ label, value, onChange, required, options, type="text" }) {
   );
 }
 
+// ─── Excel-style column filter dropdown ───────────────────────────────────────
+function FilterDropdown({ column, values, selected, onApply, isOpen, onToggle }) {
+  const allSelected = !selected; // null means all selected
+  const selectedSet = selected || new Set(values);
+  const ref = useRef();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) onToggle(null); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [isOpen, onToggle]);
+
+  if (!isOpen) return null;
+
+  const toggleAll = () => {
+    if (allSelected) onApply(new Set()); // deselect all
+    else onApply(null); // select all
+  };
+  const toggleOne = (v) => {
+    const next = new Set(selectedSet);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    // If all are selected, set to null (no filter)
+    if (next.size === values.length) onApply(null);
+    else onApply(next);
+  };
+
+  return (
+    <div ref={ref} style={{ position:"absolute", top:"100%", left:0, zIndex:100, background:"#0d1f35", border:"1px solid #1e3a5f", borderRadius:8, padding:8, minWidth:180, maxHeight:300, overflowY:"auto", boxShadow:"0 8px 24px rgba(0,0,0,0.6)" }}
+      onClick={e=>e.stopPropagation()}>
+      <div style={{ padding:"4px 8px", marginBottom:4, display:"flex", alignItems:"center", gap:6, cursor:"pointer", borderBottom:"1px solid #1e3a5f", paddingBottom:8 }} onClick={toggleAll}>
+        <input type="checkbox" checked={allSelected} readOnly style={{ accentColor:"#3b82f6" }} />
+        <span style={{ fontSize:12, color:"#94a3b8" }}>(Seleccionar todo)</span>
+      </div>
+      {values.sort().map(v => (
+        <div key={v} style={{ padding:"3px 8px", display:"flex", alignItems:"center", gap:6, cursor:"pointer" }} onClick={()=>toggleOne(v)}>
+          <input type="checkbox" checked={selectedSet.has(v)} readOnly style={{ accentColor:"#3b82f6" }} />
+          <span style={{ fontSize:11, color:"#cbd5e1", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:200 }}>{v || "(vacío)"}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SplitRow({ split, index, onChange, onRemove, base, iva, otros, count }) {
   const total = (split.pct/100) * ((base||0)+(iva||0)+(otros||0));
   return (
@@ -562,12 +607,10 @@ export default function App() {
   const [editDraft, setEditDraft]   = useState(null);
   // Escrituras from Supabase
   const [escriturasDB, setEscriturasDB] = useState([]);
-  // BD sort & filter
+  // BD sort & filter (Excel-style header filters)
   const [bdSort, setBdSort]         = useState("fecha-desc");
-  const [bdFilterActivo, setBdFilterActivo] = useState("Todos");
-  const [bdFilterTipo, setBdFilterTipo] = useState("Todos");
-  const [bdFilterCat, setBdFilterCat] = useState(null);
-  const [bdFilterProv, setBdFilterProv] = useState(null);
+  const [bdFilters, setBdFilters]   = useState({}); // { colName: Set of selected values or null (all) }
+  const [openFilterCol, setOpenFilterCol] = useState(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -783,14 +826,31 @@ export default function App() {
   // Sorted & filtered for BD tab
   const bdMovements = (() => {
     let list = [...allMovements];
-    if (bdFilterActivo !== "Todos") list = list.filter(m => m.activo === bdFilterActivo);
-    if (bdFilterTipo !== "Todos") list = list.filter(m => m.tipo === bdFilterTipo);
-    if (bdFilterCat) list = list.filter(m => m.categoria === bdFilterCat);
-    if (bdFilterProv) list = list.filter(m => m.proveedor === bdFilterProv);
+    // Apply header filters
+    Object.entries(bdFilters).forEach(([col, selected]) => {
+      if (!selected) return; // null = all selected, no filter
+      if (selected.size === 0) { list = []; return; }
+      list = list.filter(m => {
+        const val = col === "periodo" ? getQuarter(m.fecha) : m[col];
+        return selected.has(val);
+      });
+    });
     if (bdSort === "fecha-desc") list.sort((a,b) => parseDate(b.fecha) - parseDate(a.fecha));
     else if (bdSort === "fecha-asc") list.sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
     return list;
   })();
+
+  // Unique values per column for filters
+  const bdUniqueVals = {
+    periodo: [...new Set(allMovements.map(m => getQuarter(m.fecha)).filter(Boolean))],
+    tipo: [...new Set(allMovements.map(m => m.tipo).filter(Boolean))],
+    proveedor: [...new Set(allMovements.map(m => m.proveedor).filter(Boolean))],
+    activo: [...new Set(allMovements.map(m => m.activo).filter(Boolean))],
+    categoria: [...new Set(allMovements.map(m => m.categoria).filter(Boolean))],
+  };
+  const setFilter = (col, val) => setBdFilters(prev => ({ ...prev, [col]: val }));
+  const hasActiveFilters = Object.values(bdFilters).some(v => v !== null && v !== undefined);
+  const clearAllFilters = () => { setBdFilters({}); setBdSort("fecha-desc"); setOpenFilterCol(null); };
 
   // ── Edit helpers ──
   const startEdit = (mov) => {
@@ -819,15 +879,16 @@ export default function App() {
     showFlash("Nueva fila añadida — rellena los campos.", "warn");
   };
   const openDoc = async (path) => {
-    if (!path) { showFlash("Sin documento adjunto.", "warn"); return; }
+    if (!path || !path.includes("/")) { showFlash("Sin documento en Storage.", "warn"); return; }
     try {
       const url = await getSignedUrl(path);
       if (url) window.open(url, "_blank");
-      else showFlash("Documento no encontrado en Storage.", "warn");
+      else showFlash("Documento no encontrado.", "warn");
     } catch {
       showFlash("Error al acceder al documento.", "err");
     }
   };
+  const hasDoc = (path) => path && path.includes("/"); // valid storage path has a folder
 
   // Facturas para IVA/IRPF — with quarter filtering
   const allFacturasIVA = invoices.filter(inv => (inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim()));
@@ -992,48 +1053,44 @@ export default function App() {
                   </span>}
             </div>
           </div>
-          {/* Filters & sort */}
-          <div style={{ display:"flex", gap:12, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
-            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-              <span style={{ fontSize:11, color:"#475569", marginRight:4 }}>Orden:</span>
-              {[["fecha-desc","Reciente ↓"],["fecha-asc","Antigua ↑"]].map(([k,l]) => <button key={k} onClick={()=>setBdSort(k)} style={{ background:bdSort===k?"#1e3a5f":"transparent", border:`1px solid ${bdSort===k?"#3b82f6":"#1e3a5f"}`, color:bdSort===k?"#93c5fd":"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{l}</button>)}
-            </div>
-            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-              <span style={{ fontSize:11, color:"#475569" }}>Activo:</span>
-              <select value={bdFilterActivo} onChange={e=>setBdFilterActivo(e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none" }}>
-                <option value="Todos">Todos</option>
-                {ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}
-              </select>
-            </div>
-            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-              <span style={{ fontSize:11, color:"#475569" }}>Tipo:</span>
-              <select value={bdFilterTipo} onChange={e=>setBdFilterTipo(e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none" }}>
-                <option value="Todos">Todos</option>
-                <option value="Factura">Factura</option>
-                <option value="Escritura">Escritura</option>
-                <option value="G. Financiero">G. Financiero</option>
-              </select>
-            </div>
-            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-              <span style={{ fontSize:11, color:"#475569" }}>Categoría:</span>
-              <select value={bdFilterCat||"Todos"} onChange={e=>setBdFilterCat(e.target.value==="Todos"?null:e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none", maxWidth:180 }}>
-                <option value="Todos">Todos</option>
-                {[...CATEGORIAS, "G. Financiero – Póliza", "G. Financiero – Préstamo"].map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-              <span style={{ fontSize:11, color:"#475569" }}>Proveedor:</span>
-              <select value={bdFilterProv||"Todos"} onChange={e=>setBdFilterProv(e.target.value==="Todos"?null:e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none", maxWidth:180 }}>
-                <option value="Todos">Todos</option>
-                {[...new Set(allMovements.map(m=>m.proveedor).filter(Boolean))].sort().map(p=><option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-            {(bdFilterActivo!=="Todos"||bdFilterTipo!=="Todos"||bdSort!=="fecha-desc"||bdFilterCat||bdFilterProv) && <button onClick={()=>{setBdSort("fecha-desc");setBdFilterActivo("Todos");setBdFilterTipo("Todos");setBdFilterCat(null);setBdFilterProv(null)}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar</button>}
+          {/* Sort controls + clear */}
+          <div style={{ display:"flex", gap:8, marginBottom:14, alignItems:"center" }}>
+            <span style={{ fontSize:11, color:"#475569" }}>Orden:</span>
+            {[["fecha-desc","Reciente ↓"],["fecha-asc","Antigua ↑"]].map(([k,l]) => <button key={k} onClick={()=>setBdSort(k)} style={{ background:bdSort===k?"#1e3a5f":"transparent", border:`1px solid ${bdSort===k?"#3b82f6":"#1e3a5f"}`, color:bdSort===k?"#93c5fd":"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{l}</button>)}
+            {hasActiveFilters && <button onClick={clearAllFilters} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginLeft:8 }}>✕ Limpiar filtros</button>}
           </div>
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead><tr style={{ background:"#0d1f35" }}>
-                {["Fecha","Período","Tipo","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total","Doc",""].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                {[
+                  { key:"fecha", label:"Fecha" },
+                  { key:"periodo", label:"Período", filterable:true },
+                  { key:"tipo", label:"Tipo", filterable:true },
+                  { key:"proveedor", label:"Proveedor", filterable:true },
+                  { key:"concepto", label:"Concepto" },
+                  { key:"activo", label:"Activo", filterable:true },
+                  { key:"categoria", label:"Categoría", filterable:true },
+                  { key:"cuantia", label:"Cuantía", align:"right" },
+                  { key:"iva", label:"IVA", align:"right" },
+                  { key:"otros", label:"Ret.", align:"right" },
+                  { key:"total", label:"Total", align:"right" },
+                  { key:"doc", label:"Doc", align:"center" },
+                  { key:"actions", label:"" },
+                ].map(col => (
+                  <th key={col.key} style={{ padding:"9px 10px", textAlign:col.align||"left", color:bdFilters[col.key]?"#3b82f6":"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap", position:"relative", cursor:col.filterable?"pointer":"default" }}
+                    onClick={()=>{ if(col.filterable) setOpenFilterCol(openFilterCol===col.key?null:col.key) }}>
+                    {col.label}
+                    {col.filterable && <span style={{ marginLeft:4, fontSize:8, color:bdFilters[col.key]?"#3b82f6":"#334155" }}>▼</span>}
+                    {col.filterable && <FilterDropdown
+                      column={col.key}
+                      values={bdUniqueVals[col.key]||[]}
+                      selected={bdFilters[col.key]||null}
+                      isOpen={openFilterCol===col.key}
+                      onToggle={setOpenFilterCol}
+                      onApply={(val)=>setFilter(col.key,val)}
+                    />}
+                  </th>
+                ))}
               </tr></thead>
               <tbody>
                 {bdMovements.map((mov,i) => {
@@ -1079,7 +1136,7 @@ export default function App() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:mov.otros?"#f59e0b":"#334155" }}>{mov.otros?fmt(mov.otros):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt(t)}</td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
-                      {mov.archivo_origen
+                      {hasDoc(mov.archivo_origen)
                         ? <button onClick={(e)=>{e.stopPropagation();openDoc(mov.archivo_origen)}} title="Ver documento" style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button>
                         : <span style={{ color:"#1e3a5f", fontSize:11 }}>—</span>}
                     </td>
@@ -1141,7 +1198,7 @@ export default function App() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:inv.otros?"#f59e0b":"#334155" }}>{inv.otros?fmt(inv.otros):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt((inv.cuantia||0)+(inv.iva||0)+(inv.otros||0))}</td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
-                      {inv.archivo_origen ? <button onClick={()=>openDoc(inv.archivo_origen)} style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button> : <span style={{ color:"#1e3a5f" }}>—</span>}
+                      {hasDoc(inv.archivo_origen) ? <button onClick={()=>openDoc(inv.archivo_origen)} style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button> : <span style={{ color:"#1e3a5f" }}>—</span>}
                     </td>
                   </tr>)}
                 </tbody>
