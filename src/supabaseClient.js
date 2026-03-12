@@ -179,6 +179,63 @@ export async function updateEscritura(esc) {
   return data.length > 0 ? data[0] : null;
 }
 
+// ─── Movimientos Bancarios ────────────────────────────────────────────────────
+
+export async function fetchMovimientosBancarios() {
+  const { data, error } = await supabase
+    .from("movimientos_bancarios")
+    .select("*")
+    .order("fecha", { ascending: false });
+  if (error) { console.error("Supabase mov banco fetch error:", error); return null; }
+  return data.map(row => ({
+    id: row.id,
+    fecha: fromISO(row.fecha),
+    concepto: row.concepto,
+    importe: parseFloat(row.importe) || 0,
+    saldo: parseFloat(row.saldo) || 0,
+    cuenta: row.cuenta,
+    tipo: row.tipo || "otro",
+    orden: row.orden || 0,
+    factura_id: row.factura_id || null,
+    contrapartida_id: row.contrapartida_id || null,
+    notas: row.notas || "",
+  }));
+}
+
+export async function upsertMovimientosBancarios(movimientos) {
+  const rows = movimientos.map(m => ({
+    id: m.id,
+    fecha: toISO(m.fecha),
+    concepto: m.concepto,
+    importe: m.importe,
+    saldo: m.saldo,
+    cuenta: m.cuenta,
+    tipo: m.tipo || "otro",
+    orden: m.orden || 0,
+    factura_id: m.factura_id || null,
+    contrapartida_id: m.contrapartida_id || null,
+    notas: m.notas || null,
+  }));
+  // Upsert in batches of 500 to avoid payload limits
+  for (let i = 0; i < rows.length; i += 500) {
+    const batch = rows.slice(i, i + 500);
+    const { error } = await supabase
+      .from("movimientos_bancarios")
+      .upsert(batch, { onConflict: "id" });
+    if (error) { console.error("Supabase mov banco upsert error:", error); return false; }
+  }
+  return true;
+}
+
+export async function deleteAllMovimientosBancarios() {
+  const { error } = await supabase
+    .from("movimientos_bancarios")
+    .delete()
+    .neq("id", "---");
+  if (error) { console.error("Supabase mov banco delete error:", error); return false; }
+  return true;
+}
+
 // ─── File Storage (bucket: documentos) ────────────────────────────────────────
 
 export async function uploadFile(file, path) {
