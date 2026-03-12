@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, uploadFile, getSignedUrl } from "./supabaseClient";
+import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, fetchMovimientosBancarios, upsertMovimientosBancarios, deleteAllMovimientosBancarios, uploadFile, getSignedUrl } from "./supabaseClient";
 import DashboardTab from "./DashboardTab";
 import { ESCRITURAS } from "./escrituras";
 
@@ -50,6 +50,128 @@ function parseXLSX(buffer, account) {
       if (!cls) return [];
       return [{ id: `${account}-${dateRaw}-${concept}-${amount}`, date: dateRaw, concept, account, amount, cat: cls.cat, sub: cls.sub }];
     });
+  } catch { return []; }
+}
+
+// ─── Clasificación Movimientos Bancarios ─────────────────────────────────────
+const BANK_TYPES = {
+  aportacion:       { label: "Aportación",    color: "#4ade80", bg: "#052e16" },
+  deposito:         { label: "Depósito",       color: "#a78bfa", bg: "#1e1b4b" },
+  prestamo:         { label: "Préstamo",       color: "#c084fc", bg: "#2e1065" },
+  transferencia:    { label: "Traspaso",       color: "#38bdf8", bg: "#0c4a6e" },
+  gasto_financiero: { label: "G. Financiero",  color: "#8b5cf6", bg: "#1e1b4b" },
+  pago_factura:     { label: "Pago factura",   color: "#60a5fa", bg: "#0f2942" },
+  tributos:         { label: "Tributos",       color: "#fb923c", bg: "#431407" },
+  comision:         { label: "Comisión banco", color: "#94a3b8", bg: "#1e293b" },
+  compraventa:      { label: "Compraventa",    color: "#f87171", bg: "#450a0a" },
+  devolucion:       { label: "Reembolso",      color: "#fbbf24", bg: "#422006" },
+  fianza:           { label: "Fianza",         color: "#2dd4bf", bg: "#042f2e" },
+  arras:            { label: "Arras",          color: "#f472b6", bg: "#500724" },
+  otro:             { label: "Otro",           color: "#64748b", bg: "#1e293b" },
+};
+
+const BANK_RULES = [
+  // Aportaciones de socios
+  { match: /TRANSF\. A SU FAVOR/i,    tipo: "aportacion" },
+  { match: /TRANSFER\. EN DIV/i,      tipo: "aportacion" },
+  { match: /TRANSFER INMEDIATA/i,     tipo: "aportacion" },
+  // Depósito pignorado
+  { match: /CONST\. AHORRO PLAZO/i,   tipo: "deposito" },
+  { match: /CANCEL\.AHORRO PLAZO/i,   tipo: "deposito" },
+  // Préstamo
+  { match: /CANCELAC\.PRESTAMO/i,     tipo: "prestamo" },
+  { match: /CONSTIT\. PRESTAMO/i,     tipo: "prestamo" },
+  // Transferencias internas
+  { match: /TRASPASO/i,               tipo: "transferencia" },
+  // Gastos financieros
+  { match: /LIQUIDACION CTA\.?CTO/i,  tipo: "gasto_financiero" },
+  { match: /MANTENIMIENTO/i,          tipo: "gasto_financiero" },
+  { match: /ADMINISTRACI[OÓ]N DEP/i,  tipo: "gasto_financiero" },
+  { match: /PRECIO ED\. EXTRACTO/i,   tipo: "gasto_financiero" },
+  { match: /^PRES\.\d/i,              tipo: "gasto_financiero" },
+  { match: /SEGUR.*CAIXA/i,           tipo: "gasto_financiero" },
+  { match: /RECIBO UNICO MYBOX/i,     tipo: "gasto_financiero" },
+  { match: /SEVIAM/i,                 tipo: "gasto_financiero" },
+  { match: /F0000005620267/i,         tipo: "gasto_financiero" },
+  // Reembolsos personales
+  { match: /Devolucion gastos/i,      tipo: "devolucion" },
+  { match: /Pago con cuenta p/i,      tipo: "devolucion" },
+  // Tributos
+  { match: /^TRIBUTOS$/i,             tipo: "tributos" },
+  { match: /I\.R\.P\.F/i,             tipo: "tributos" },
+  // Comisiones bancarias
+  { match: /PRECIO ABONO TRF/i,      tipo: "comision" },
+  { match: /PRECIO TRF\.REC/i,       tipo: "comision" },
+  { match: /P\.SERV\.CERTIF/i,       tipo: "comision" },
+  { match: /P\.SERV\. TRF/i,         tipo: "comision" },
+  { match: /SERV\.RECEP\.TRANSF/i,   tipo: "comision" },
+  { match: /SERV\. TRF URGENTE/i,    tipo: "comision" },
+  { match: /SERV\.CONST\.FIANZA/i,   tipo: "comision" },
+  // Fianzas
+  { match: /CONSTITUCION FIANZA/i,   tipo: "fianza" },
+  { match: /LIBERACION FIANZA/i,     tipo: "fianza" },
+  { match: /^Fianzas/i,              tipo: "fianza" },
+  // Compraventas
+  { match: /Compraventa/i,           tipo: "compraventa" },
+  { match: /CHEQUE BANCA/i,          tipo: "compraventa" },
+  { match: /CH-\d+-\d+/i,            tipo: "compraventa" },
+  { match: /CG-\d+-\d+/i,            tipo: "compraventa" },
+  // Arras
+  { match: /ARRAS/i,                 tipo: "arras" },
+  // Pagos de facturas (genérico — va al final)
+  { match: /Anticipos/i,             tipo: "pago_factura" },
+  { match: /^Factura/i,              tipo: "pago_factura" },
+  { match: /^FACTURA/i,              tipo: "pago_factura" },
+  { match: /ALZAI/i,                 tipo: "pago_factura" },
+  { match: /Indemnizacion/i,         tipo: "pago_factura" },
+  { match: /C\.A\. MADRID/i,         tipo: "pago_factura" },
+  { match: /BUILDING CENTER/i,       tipo: "pago_factura" },
+  { match: /^PR1 \//i,               tipo: "pago_factura" },
+  { match: /^L \/ \d+/i,             tipo: "pago_factura" },
+  { match: /^802174R/i,              tipo: "pago_factura" },
+  { match: /^0000\d+ PRO/i,          tipo: "pago_factura" },
+  { match: /Factura.* ZL/i,          tipo: "pago_factura" },
+];
+
+const classifyBank = (concepto) => {
+  for (const r of BANK_RULES) if (r.match.test(concepto)) return r.tipo;
+  return "otro";
+};
+
+const parseBankAmount = (str) =>
+  parseFloat((str || "").replace(/EUR/gi, "").replace(/\./g, "").replace(",", ".").trim());
+
+function parseBankCSV(text, account) {
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  return lines.slice(1).map((line, idx) => {
+    const p = line.split(";");
+    if (p.length < 4) return null;
+    const concepto = p[0].trim();
+    const fecha = p[1].trim();
+    const importe = parseBankAmount(p[2]);
+    const saldo = parseBankAmount(p[3]);
+    if (isNaN(importe) || !concepto || !fecha) return null;
+    const tipo = classifyBank(concepto);
+    const id = `bk-${account}-${fecha.replace(/\//g, "")}-${importe.toFixed(2)}-${saldo.toFixed(2)}`;
+    return { id, fecha, concepto, importe, saldo, cuenta: account, tipo, orden: idx, factura_id: null, contrapartida_id: null, notas: "" };
+  }).filter(Boolean);
+}
+
+function parseBankXLSX(buffer, account) {
+  try {
+    const wb = XLSX.read(buffer, { type: "array" });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false });
+    return rows.slice(1).map((row, idx) => {
+      if (!row || row.length < 4) return null;
+      const concepto = String(row[0] || "").trim();
+      const fecha = String(row[1] || "").trim();
+      const importe = parseBankAmount(String(row[2] || ""));
+      const saldo = parseBankAmount(String(row[3] || ""));
+      if (isNaN(importe) || !concepto || !fecha) return null;
+      const tipo = classifyBank(concepto);
+      const id = `bk-${account}-${fecha.replace(/\//g, "")}-${importe.toFixed(2)}-${saldo.toFixed(2)}`;
+      return { id, fecha, concepto, importe, saldo, cuenta: account, tipo, orden: idx, factura_id: null, contrapartida_id: null, notas: "" };
+    }).filter(Boolean);
   } catch { return []; }
 }
 
@@ -669,6 +791,11 @@ export default function App() {
   const [editDraft, setEditDraft]   = useState(null);
   // Escrituras from Supabase
   const [escriturasDB, setEscriturasDB] = useState([]);
+  // Bank movements
+  const [bankMovements, setBankMovements] = useState([]);
+  const [bankFilterCuenta, setBankFilterCuenta] = useState("Todas");
+  const [bankFilterTipo, setBankFilterTipo] = useState(null);
+  const [confirmBorrarBanco, setConfirmBorrarBanco] = useState(false);
   // BD sort & filter (Excel-style header filters)
   const [bdSortCol, setBdSortCol]   = useState("fecha");
   const [bdSortDir, setBdSortDir]   = useState("desc");
@@ -694,6 +821,9 @@ export default function App() {
         // Load escrituras from Supabase
         const sbEsc = await fetchEscrituras();
         if (sbEsc && sbEsc.length > 0) setEscriturasDB(sbEsc);
+        // Load bank movements
+        const sbBank = await fetchMovimientosBancarios();
+        if (sbBank && sbBank.length > 0) setBankMovements(sbBank);
       } catch {
         try {
           const e = localStorage.getItem("gf-entries-arena-nexus"); if (e) setEntries(JSON.parse(e));
@@ -840,20 +970,62 @@ export default function App() {
     if (!ccFile && !cpFile) { showFlash("Selecciona al menos un archivo.","err"); return; }
     setImporting(true);
     try {
-      let all = [];
+      let allBank = [], allGF = [];
       for (const [file, account] of [[ccFile,"CC"],[cpFile,"CP"]]) {
         if (!file) continue;
         const data = await readFile(file);
-        all = [...all, ...(file.name.endsWith(".csv") ? parseCSV(data,account) : parseXLSX(data,account))];
+        // Detect: 4 columns = full bank extract, 3 = G. Financieros only
+        let is4Col = false;
+        if (typeof data === "string") {
+          const firstLine = data.split(/\r?\n/)[0] || "";
+          is4Col = firstLine.split(";").length >= 4;
+        } else {
+          try {
+            const wb = XLSX.read(data, { type: "array" });
+            const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false });
+            is4Col = rows.length > 0 && (rows[0] || []).length >= 4;
+          } catch {}
+        }
+        if (is4Col) {
+          const bankMov = typeof data === "string" ? parseBankCSV(data, account) : parseBankXLSX(data, account);
+          allBank.push(...bankMov);
+          // Also extract G. Financieros from same data
+          bankMov.filter(m => m.tipo === "gasto_financiero").forEach(m => {
+            const cls = classify(m.concepto);
+            if (cls) allGF.push({ id: `${account}-${m.fecha}-${m.concepto}-${m.importe}`, date: m.fecha, concept: m.concepto, account, amount: m.importe, cat: cls.cat, sub: cls.sub });
+          });
+        } else {
+          const gf = typeof data === "string" ? parseCSV(data, account) : parseXLSX(data, account);
+          allGF.push(...gf);
+        }
       }
-      if (!all.length) { showFlash("No se encontraron gastos financieros.","err"); setImporting(false); return; }
-      const ids = new Set(entries.map(e=>e.id));
-      const fresh = all.filter(e=>!ids.has(e.id));
-      if (!fresh.length) { showFlash("Todos ya estaban registrados.","warn"); setImporting(false); return; }
-      setEntries(prev => [...prev,...fresh].sort((a,b)=>parseDate(a.date)-parseDate(b.date)));
+      let msgs = [];
+      // Save bank movements
+      if (allBank.length > 0) {
+        const existingIds = new Set(bankMovements.map(m => m.id));
+        const freshBank = allBank.filter(m => !existingIds.has(m.id));
+        if (freshBank.length > 0) {
+          const merged = [...bankMovements, ...freshBank];
+          setBankMovements(merged);
+          upsertMovimientosBancarios(freshBank).catch(() => {});
+          msgs.push(`${freshBank.length} movimientos bancarios`);
+        } else {
+          msgs.push("Movimientos bancarios ya registrados");
+        }
+      }
+      // Save G. Financieros
+      if (allGF.length > 0) {
+        const ids = new Set(entries.map(e => e.id));
+        const freshGF = allGF.filter(e => !ids.has(e.id));
+        if (freshGF.length > 0) {
+          setEntries(prev => [...prev, ...freshGF].sort((a,b) => parseDate(a.date) - parseDate(b.date)));
+          msgs.push(`${freshGF.length} G. Financieros`);
+        }
+      }
+      if (msgs.length === 0) showFlash("No se encontraron movimientos nuevos.", "warn");
+      else showFlash(`✓ ${msgs.join(" + ")} importados.`);
       setCcFile(null); setCpFile(null);
-      showFlash(`✓ ${fresh.length} movimiento${fresh.length!==1?"s":""} importado${fresh.length!==1?"s":""}.`);
-    } catch { showFlash("Error leyendo archivos.","err"); }
+    } catch(e) { console.error(e); showFlash("Error leyendo archivos.", "err"); }
     setImporting(false);
   };
 
@@ -1006,7 +1178,7 @@ export default function App() {
 
   if (!loaded) return <div style={{ background:"#080f1a", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", color:"#3b82f6", fontFamily:"monospace" }}>Cargando…</div>;
 
-  const TABS = [["importar","⬆ Importar"],["bd","🗄 Base de datos"],["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["gf","🏦 G. Financieros"],["resumen","📈 Resumen"]];
+  const TABS = [["importar","⬆ Importar"],["bd","🗄 Base de datos"],["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["gf","🏦 G. Financieros"],["banco","💳 Banco"],["resumen","📈 Resumen"]];
 
   return (
     <div style={{ background:"#080f1a", minHeight:"100vh", fontFamily:"'DM Mono','Fira Code',monospace", color:"#e2e8f0" }}>
@@ -1061,10 +1233,10 @@ export default function App() {
             {/* Right: Extractos bancarios */}
             <div style={{ flex:"1 1 300px", minWidth:280 }}>
               <div style={{ fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>Extractos bancarios</div>
-              <div style={{ fontSize:12, color:"#475569", marginBottom:16, lineHeight:1.7 }}>Para gastos financieros (intereses, comisiones, seguros).</div>
+              <div style={{ fontSize:12, color:"#475569", marginBottom:16, lineHeight:1.7 }}>Importa extractos completos (CC y/o CP). Detecta formato automáticamente.</div>
               <DropZone label="CC" name="Cuenta Corriente" file={ccFile} onFile={setCcFile} />
               <DropZone label="CP" name="Póliza de Crédito" file={cpFile} onFile={setCpFile} />
-              <button onClick={handleImport} disabled={importing} style={{ background:importing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:importing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{importing ? "Procesando…" : "Importar extractos"}</button>
+              <button onClick={handleImport} disabled={importing} style={{ background:importing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:importing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{importing ? "Procesando…" : "Importar movimientos"}</button>
             </div>
           </div>
 
@@ -1367,6 +1539,124 @@ export default function App() {
             <div style={{ marginTop:16, padding:14, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, fontSize:12, color:"#475569" }}>Período: <span style={{ color:"#94a3b8" }}>{entries[0]?.date}</span> → <span style={{ color:"#94a3b8" }}>{entries[entries.length-1]?.date}</span> · {entries.length} movimientos</div>
           </div>}
         </div>}
+
+        {/* ══ BANCO ══ */}
+        {tab==="banco" && (() => {
+          const bankCC = bankMovements.filter(m => m.cuenta === "CC");
+          const bankCP = bankMovements.filter(m => m.cuenta === "CP");
+          // Current saldos: entry with lowest orden (most recent in original statement)
+          const saldoCC = bankCC.length > 0 ? bankCC.reduce((best, m) => (m.orden < best.orden ? m : best), bankCC[0]).saldo : 0;
+          const saldoCP = bankCP.length > 0 ? bankCP.reduce((best, m) => (m.orden < best.orden ? m : best), bankCP[0]).saldo : 0;
+          const posNeta = saldoCC + saldoCP;
+          // Filter & sort
+          const fMov = bankMovements
+            .filter(m => bankFilterCuenta === "Todas" || m.cuenta === bankFilterCuenta)
+            .filter(m => !bankFilterTipo || m.tipo === bankFilterTipo)
+            .sort((a, b) => {
+              const da = parseDate(a.fecha), db = parseDate(b.fecha);
+              if (da.getTime() !== db.getTime()) return db - da;
+              return a.orden - b.orden;
+            });
+          const tiposPresent = [...new Set(bankMovements.map(m => m.tipo))].sort();
+          // Summary by type
+          const byTipo = {};
+          bankMovements.forEach(m => {
+            if (!byTipo[m.tipo]) byTipo[m.tipo] = { ing: 0, car: 0, n: 0 };
+            if (m.importe >= 0) byTipo[m.tipo].ing += m.importe;
+            else byTipo[m.tipo].car += m.importe;
+            byTipo[m.tipo].n++;
+          });
+          return <div>
+            {bankMovements.length === 0
+              ? <div style={{ textAlign:"center", padding:"60px 0" }}>
+                  <div style={{ fontSize:48, marginBottom:16 }}>💳</div>
+                  <div style={{ fontSize:16, color:"#64748b", marginBottom:8 }}>Sin movimientos bancarios</div>
+                  <div style={{ fontSize:13, color:"#334155" }}>Ve a <span style={{ color:"#3b82f6", cursor:"pointer" }} onClick={()=>setTab("importar")}>Importar</span> para cargar extractos completos.</div>
+                </div>
+              : <>
+                {/* Balance cards */}
+                <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:24 }}>
+                  {[
+                    { label:"Cuenta Corriente", val:saldoCC, color:saldoCC>=0?"#4ade80":"#f87171", sub:`${bankCC.length} movimientos` },
+                    { label:"Póliza de Crédito", val:saldoCP, color:"#f87171", sub:`Dispuesto · ${bankCP.length} mov.` },
+                    { label:"Posición neta", val:posNeta, color:posNeta>=0?"#4ade80":"#f87171", sub:"CC + CP" },
+                  ].map(c => <div key={c.label} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"16px 20px", flex:"1 1 200px", minWidth:170 }}>
+                    <div style={{ fontSize:11, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>{c.label}</div>
+                    <div style={{ fontSize:22, fontWeight:700, color:c.color }}>{fmt(c.val)}</div>
+                    <div style={{ fontSize:11, color:"#334155", marginTop:2 }}>{c.sub}</div>
+                  </div>)}
+                </div>
+
+                {/* Filters */}
+                <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+                  {["Todas","CC","CP"].map(c => <button key={c} onClick={()=>setBankFilterCuenta(c)} style={{ background:bankFilterCuenta===c?"#1e3a5f":"transparent", border:`1px solid ${bankFilterCuenta===c?"#3b82f6":"#1e3a5f"}`, color:bankFilterCuenta===c?"#93c5fd":"#64748b", padding:"5px 12px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{c}</button>)}
+                  <span style={{ color:"#1e3a5f", margin:"0 4px" }}>·</span>
+                  {tiposPresent.map(t => { const bt = BANK_TYPES[t]||BANK_TYPES.otro; return <button key={t} onClick={()=>setBankFilterTipo(bankFilterTipo===t?null:t)} style={{ background:bankFilterTipo===t?bt.bg:"transparent", border:`1px solid ${bankFilterTipo===t?bt.color:"#1e3a5f"}`, color:bankFilterTipo===t?bt.color:"#475569", padding:"4px 10px", borderRadius:20, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{bt.label}</button>; })}
+                  {(bankFilterCuenta!=="Todas"||bankFilterTipo) && <button onClick={()=>{setBankFilterCuenta("Todas");setBankFilterTipo(null)}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar</button>}
+                </div>
+
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                  <div style={{ fontSize:12, color:"#475569" }}>{fMov.length} de {bankMovements.length} movimientos</div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    {!confirmBorrarBanco
+                      ? <button onClick={()=>setConfirmBorrarBanco(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar todo</button>
+                      : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                          <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro?</span>
+                          <button onClick={()=>{ setBankMovements([]); deleteAllMovimientosBancarios().catch(()=>{}); setConfirmBorrarBanco(false); showFlash("Movimientos bancarios eliminados.","err"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
+                          <button onClick={()=>setConfirmBorrarBanco(false)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
+                        </span>}
+                  </div>
+                </div>
+
+                {/* Table */}
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                    <thead><tr style={{ background:"#0d1f35" }}>
+                      {[{k:"fecha",l:"Fecha"},{k:"concepto",l:"Concepto"},{k:"tipo",l:"Tipo"},{k:"cuenta",l:"Cta."},{k:"importe",l:"Importe",a:"right"},{k:"saldo",l:"Saldo",a:"right"}].map(h =>
+                        <th key={h.k} style={{ padding:"9px 10px", textAlign:h.a||"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h.l}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {fMov.map((m, i) => {
+                        const bt = BANK_TYPES[m.tipo] || BANK_TYPES.otro;
+                        return <tr key={m.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
+                          <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{m.fecha}</td>
+                          <td style={{ padding:"8px 10px", color:"#cbd5e1", maxWidth:300, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.concepto}</td>
+                          <td style={{ padding:"8px 10px" }}><span style={{ background:bt.bg, color:bt.color, border:`1px solid ${bt.color}30`, padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600, whiteSpace:"nowrap" }}>{bt.label}</span></td>
+                          <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:m.cuenta==="CC"?"#60a5fa":"#c084fc", padding:"2px 8px", borderRadius:4, fontSize:11, fontWeight:700 }}>{m.cuenta}</span></td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:m.importe>=0?"#4ade80":"#f87171", fontWeight:600, whiteSpace:"nowrap" }}>{m.importe>=0?"+":""}{fmt(m.importe)}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:"#64748b", whiteSpace:"nowrap" }}>{fmt(m.saldo)}</td>
+                        </tr>;
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Summary by type */}
+                <div style={{ marginTop:32, maxWidth:640 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:"#94a3b8", marginBottom:16, letterSpacing:1, textTransform:"uppercase" }}>Resumen por tipo</div>
+                  {tiposPresent.map(t => {
+                    const bt = BANK_TYPES[t] || BANK_TYPES.otro;
+                    const d = byTipo[t];
+                    return <div key={t} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #0d1f35" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ background:bt.bg, color:bt.color, border:`1px solid ${bt.color}30`, padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600, whiteSpace:"nowrap", minWidth:100, textAlign:"center" }}>{bt.label}</span>
+                        <span style={{ color:"#475569", fontSize:11 }}>{d.n} mov.</span>
+                      </div>
+                      <div style={{ display:"flex", gap:16, fontSize:12 }}>
+                        {d.ing > 0 && <span style={{ color:"#4ade80" }}>+{fmt(d.ing)}</span>}
+                        {d.car < 0 && <span style={{ color:"#f87171" }}>{fmt(d.car)}</span>}
+                      </div>
+                    </div>;
+                  })}
+                  <div style={{ borderTop:"1px solid #1e3a5f", paddingTop:12, marginTop:12, display:"flex", justifyContent:"space-between" }}>
+                    <span style={{ fontSize:13, fontWeight:700, color:"#94a3b8" }}>Total movimientos</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:"#64748b" }}>{bankMovements.length}</span>
+                  </div>
+                </div>
+              </>
+            }
+          </div>;
+        })()}
 
         {/* ══ RESUMEN ══ */}
         {tab==="resumen" && <div style={{ textAlign:"center", padding:"80px 0" }}>
