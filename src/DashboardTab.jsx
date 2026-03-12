@@ -1,5 +1,6 @@
 import { useState } from "react";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { ESCRITURAS, TOTAL_PRECIO_ADQUISICION } from "./escrituras";
 
 const fmt = (n) =>
@@ -262,7 +263,7 @@ function shortCat(cat) {
 
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
-export default function DashboardTab({ invoices = [] }) {
+export default function DashboardTab({ invoices = [], entries = [] }) {
   const [view, setView] = useState("resumen"); // "resumen" | "detalle"
   const d = computeData(invoices);
 
@@ -270,6 +271,70 @@ export default function DashboardTab({ invoices = [] }) {
   const totalPosesion = d.summaryByCat["Costes de posesión"] || 0;
   const totalLegal = d.summaryByCat["Costes legales"] || 0;
   const totalCapex = d.summaryByCat["Capex"] || 0;
+
+  // Export Reporting — exact replica of user's Excel: Bahnschrift Light 16pt, #,##0
+  const exportReporting = async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Reporting");
+
+    const cats = [
+      "Adquisición (incluye gastos e impuestos)",
+      "Costes legales",
+      "Capex",
+      "Costes de posesión",
+      "Costes de implementación (SPV, abogados, etc.)",
+      "Opex",
+      "Comisión de gestión",
+      "Costes financieros netos",
+    ];
+    const catTotals = {};
+    cats.forEach(c => { catTotals[c] = 0; });
+    invoices.forEach(inv => {
+      const t = (inv.cuantia||0) + (inv.iva||0) + (inv.otros||0);
+      if (catTotals[inv.categoria] !== undefined) catTotals[inv.categoria] += t;
+    });
+    catTotals["Costes financieros netos"] = entries.reduce((s,e) => s + Math.abs(e.amount), 0);
+    const grandTotal = cats.reduce((s,c) => s + catTotals[c], 0);
+
+    // Column widths
+    ws.getColumn(2).width = 50;
+    ws.getColumn(3).width = 14;
+
+    const baseFont = { name: "Bahnschrift Light", size: 16 };
+    const boldFont = { name: "Bahnschrift Light", size: 16, bold: true };
+    const numFmt = "#,##0";
+
+    // Row 2: Header "Actual" in C2
+    const headerRow = ws.getRow(2);
+    headerRow.getCell(3).value = "Actual";
+    headerRow.getCell(3).font = boldFont;
+    headerRow.getCell(3).alignment = { horizontal: "right" };
+
+    // Rows 3-10: Categories
+    cats.forEach((cat, i) => {
+      const row = ws.getRow(3 + i);
+      row.getCell(2).value = cat;
+      row.getCell(2).font = baseFont;
+      row.getCell(3).value = Math.round(catTotals[cat]);
+      row.getCell(3).font = baseFont;
+      row.getCell(3).numFmt = numFmt;
+    });
+
+    // Row 11: Total
+    const totalRow = ws.getRow(11);
+    totalRow.getCell(2).value = "Total";
+    totalRow.getCell(2).font = boldFont;
+    totalRow.getCell(3).value = Math.round(grandTotal);
+    totalRow.getCell(3).font = { name: "Aptos Narrow", size: 16, bold: true };
+    totalRow.getCell(3).numFmt = numFmt;
+
+    // Download
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "Export_reporting.xlsx"; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
 
   const exportExcel = () => {
     const codes = Object.keys(ESCRITURAS);
@@ -402,6 +467,7 @@ export default function DashboardTab({ invoices = [] }) {
         ))}
         </div>
         <button onClick={exportExcel} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>📥 Exportar Excel</button>
+        <button onClick={exportReporting} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>📥 Export reporting</button>
       </div>
 
       {view === "resumen" && (
