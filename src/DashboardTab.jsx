@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as XLSX from "xlsx";
 import { ESCRITURAS, TOTAL_PRECIO_ADQUISICION } from "./escrituras";
 
 const fmt = (n) =>
@@ -270,6 +271,64 @@ export default function DashboardTab({ invoices = [] }) {
   const totalLegal = d.summaryByCat["Costes legales"] || 0;
   const totalCapex = d.summaryByCat["Capex"] || 0;
 
+  const exportExcel = () => {
+    const codes = Object.keys(ESCRITURAS);
+    const rows = [];
+    // Header
+    rows.push(["", "Total costes", d.grandTotal, "", "", "Total coste activos", d.totalActivos]);
+    rows.push([]);
+    // Costes generales
+    rows.push(["", "Total costes generales", d.totalGeneral]);
+    CAT_GENERALES.forEach(cat => {
+      rows.push(["", shortCat(cat), d.anData[cat] || 0]);
+    });
+    rows.push([]);
+    // Asset table header
+    const assetHeader = ["", "", ""];
+    codes.forEach(code => assetHeader.push(code));
+    assetHeader.push("TOTAL");
+    rows.push(assetHeader);
+    // Each category row
+    [...CAT_ACTIVOS].forEach(cat => {
+      const row = ["", shortCat(cat), ""];
+      codes.forEach(code => row.push(d.assetData[code]?.cats[cat] || 0));
+      const rowT = codes.reduce((s, c) => s + (d.assetData[c]?.cats[cat] || 0), 0);
+      row.push(rowT);
+      rows.push(row);
+    });
+    // Total row
+    const totalRow = ["", "TOTAL", ""];
+    codes.forEach(code => totalRow.push(d.assetData[code]?.total || 0));
+    totalRow.push(d.totalActivos);
+    rows.push(totalRow);
+    rows.push([]);
+    // Asset detail cards
+    codes.forEach(code => {
+      const esc = ESCRITURAS[code];
+      const ad = d.assetData[code];
+      rows.push([code, esc?.nombre || "", ad?.total || 0]);
+      CAT_ACTIVOS.forEach(cat => {
+        rows.push(["", shortCat(cat), ad?.cats[cat] || 0]);
+      });
+      rows.push(["", "Precio escritura", esc?.precio || 0]);
+      rows.push([]);
+    });
+    // Summary by category
+    rows.push(["", "Resumen por categoría", "Actual"]);
+    const allCats = [...CAT_GENERALES, ...CAT_ACTIVOS];
+    allCats.forEach(cat => {
+      rows.push(["", shortCat(cat), d.summaryByCat[cat] || 0]);
+    });
+    rows.push(["", "TOTAL", d.grandTotal]);
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    // Set column widths
+    ws["!cols"] = [{wch:8},{wch:40},{wch:14},...codes.map(()=>({wch:14})),{wch:14}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Dashboard");
+    XLSX.writeFile(wb, "arena_nexus_dashboard.xlsx");
+  };
+
   return (
     <div>
       {/* ── Top stats ── */}
@@ -306,41 +365,43 @@ export default function DashboardTab({ invoices = [] }) {
         />
       </div>
 
-      {/* ── View toggle ── */}
-      <div
-        style={{
-          display: "flex",
-          gap: 4,
-          marginBottom: 24,
-          background: "#0a1628",
-          borderRadius: 8,
-          padding: 3,
-          width: "fit-content",
-          border: "1px solid #1e3a5f",
-        }}
-      >
-        {[
-          ["resumen", "Resumen por activo"],
-          ["detalle", "Desglose categorías"],
-        ].map(([k, label]) => (
-          <button
-            key={k}
-            onClick={() => setView(k)}
-            style={{
-              background: view === k ? "#1e3a5f" : "transparent",
-              border: "none",
-              color: view === k ? "#93c5fd" : "#475569",
-              padding: "7px 16px",
-              borderRadius: 6,
-              cursor: "pointer",
-              fontSize: 12,
-              fontFamily: "inherit",
-              fontWeight: view === k ? 600 : 400,
-            }}
-          >
-            {label}
+      {/* ── View toggle + Export ── */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 24 }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 4,
+            background: "#0a1628",
+            borderRadius: 8,
+            padding: 3,
+            width: "fit-content",
+            border: "1px solid #1e3a5f",
+          }}
+        >
+          {[
+            ["resumen", "Resumen por activo"],
+            ["detalle", "Desglose categorías"],
+          ].map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setView(k)}
+              style={{
+                background: view === k ? "#1e3a5f" : "transparent",
+                border: "none",
+                color: view === k ? "#93c5fd" : "#475569",
+                padding: "7px 16px",
+                borderRadius: 6,
+                cursor: "pointer",
+                fontSize: 12,
+                fontFamily: "inherit",
+                fontWeight: view === k ? 600 : 400,
+              }}
+            >
+              {label}
           </button>
         ))}
+        </div>
+        <button onClick={exportExcel} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>📥 Exportar Excel</button>
       </div>
 
       {view === "resumen" && (
