@@ -272,7 +272,7 @@ export default function DashboardTab({ invoices = [], entries = [] }) {
   const totalLegal = d.summaryByCat["Costes legales"] || 0;
   const totalCapex = d.summaryByCat["Capex"] || 0;
 
-  // Export Reporting — exact replica of user's Excel: Bahnschrift Light 16pt, #,##0
+  // Export Reporting — exact replica of user's Excel
   const exportReporting = async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Reporting");
@@ -296,39 +296,41 @@ export default function DashboardTab({ invoices = [], entries = [] }) {
     catTotals["Costes financieros netos"] = entries.reduce((s,e) => s + Math.abs(e.amount), 0);
     const grandTotal = cats.reduce((s,c) => s + catTotals[c], 0);
 
-    // Column widths
-    ws.getColumn(2).width = 50;
-    ws.getColumn(3).width = 14;
+    // Column widths (exact from original)
+    ws.getColumn(1).width = 3;
+    ws.getColumn(2).width = 64.54;
+    ws.getColumn(3).width = 15.27;
 
     const baseFont = { name: "Bahnschrift Light", size: 16 };
     const boldFont = { name: "Bahnschrift Light", size: 16, bold: true };
-    const numFmt = "#,##0";
 
-    // Row 2: Header "Actual" in C2
-    const headerRow = ws.getRow(2);
-    headerRow.getCell(3).value = "Actual";
-    headerRow.getCell(3).font = boldFont;
-    headerRow.getCell(3).alignment = { horizontal: "right" };
+    // Row 2: "Actual" header
+    const r2 = ws.getRow(2);
+    r2.height = 20;
+    r2.getCell(3).value = "Actual";
+    r2.getCell(3).font = boldFont;
+    r2.getCell(3).alignment = { horizontal: "right" };
 
     // Rows 3-10: Categories
     cats.forEach((cat, i) => {
       const row = ws.getRow(3 + i);
+      row.height = 20;
       row.getCell(2).value = cat;
       row.getCell(2).font = baseFont;
       row.getCell(3).value = Math.round(catTotals[cat]);
       row.getCell(3).font = baseFont;
-      row.getCell(3).numFmt = numFmt;
+      row.getCell(3).numFmt = "#,##0";
     });
 
     // Row 11: Total
-    const totalRow = ws.getRow(11);
-    totalRow.getCell(2).value = "Total";
-    totalRow.getCell(2).font = boldFont;
-    totalRow.getCell(3).value = Math.round(grandTotal);
-    totalRow.getCell(3).font = { name: "Aptos Narrow", size: 16, bold: true };
-    totalRow.getCell(3).numFmt = numFmt;
+    const r11 = ws.getRow(11);
+    r11.height = 20;
+    r11.getCell(2).value = "Total";
+    r11.getCell(2).font = boldFont;
+    r11.getCell(3).value = { formula: "SUM(C3:C10)" };
+    r11.getCell(3).font = boldFont;
+    r11.getCell(3).numFmt = "#,##0";
 
-    // Download
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const url = URL.createObjectURL(blob);
