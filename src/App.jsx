@@ -796,6 +796,8 @@ export default function App() {
   const [bankFilterCuenta, setBankFilterCuenta] = useState("Todas");
   const [bankFilterTipo, setBankFilterTipo] = useState(null);
   const [confirmBorrarBanco, setConfirmBorrarBanco] = useState(false);
+  const [bankFilterCol, setBankFilterCol] = useState(null);
+  const [bankFilters, setBankFilters] = useState({});
   // BD sort & filter (Excel-style header filters)
   const [bdSortCol, setBdSortCol]   = useState("fecha");
   const [bdSortDir, setBdSortDir]   = useState("desc");
@@ -1178,7 +1180,7 @@ export default function App() {
 
   if (!loaded) return <div style={{ background:"#080f1a", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", color:"#3b82f6", fontFamily:"monospace" }}>Cargando…</div>;
 
-  const TABS = [["importar","⬆ Importar"],["bd","🗄 Base de datos"],["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["gf","🏦 G. Financieros"],["banco","💳 Banco"],["resumen","📈 Resumen"]];
+  const TABS = [["importar","⬆ Importar"],["bd","🗄 Base de datos"],["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["banco","💳 Banco"],["gf","🏦 G. Financieros"],["resumen","📈 Resumen"]];
 
   return (
     <div style={{ background:"#080f1a", minHeight:"100vh", fontFamily:"'DM Mono','Fira Code',monospace", color:"#e2e8f0" }}>
@@ -1501,7 +1503,72 @@ export default function App() {
         {tab==="dashboard" && <DashboardTab invoices={invoices} entries={entries} />}
 
         {/* ══ G. FINANCIEROS ══ */}
-        {tab==="gf" && <div>
+        {tab==="gf" && (() => {
+          // Deposit calculation: 1.250.000€ at 1.7% annual from 07/07/2025
+          const depositAmount = 1250000;
+          const depositRate = 0.017;
+          const depositStart = new Date(2025, 6, 7); // 07/07/2025
+          const today = new Date();
+          const daysSinceDeposit = Math.max(0, Math.floor((today - depositStart) / (1000*60*60*24)));
+          const depositAccrued = depositAmount * depositRate * (daysSinceDeposit / 365);
+          const netFinancial = total + depositAccrued; // total is negative (costs), deposit is positive
+
+          return <div>
+          {/* Summary cards on top */}
+          {entries.length > 0 && <div style={{ marginBottom:28 }}>
+            <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginBottom:20 }}>
+              {/* Póliza card */}
+              <div style={{ flex:"1 1 240px", minWidth:220, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ background:"#0f294220", borderBottom:"1px solid #1e3a5f", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ color:"#3b82f6", fontSize:12, fontWeight:700 }}>Póliza de crédito</span>
+                  <span style={{ color:"#f87171", fontSize:16, fontWeight:700 }}>{fmt(summary["G. Financiero – Póliza"]||0)}</span>
+                </div>
+                <div style={{ padding:"10px 16px" }}>
+                  {entries.filter(e=>e.cat==="G. Financiero – Póliza").reduce((acc,e)=>{ acc[e.sub]=(acc[e.sub]||0)+e.amount; return acc; }, {}) && Object.entries(entries.filter(e=>e.cat==="G. Financiero – Póliza").reduce((acc,e)=>{ acc[e.sub]=(acc[e.sub]||0)+e.amount; return acc; }, {})).map(([sub,v]) => <div key={sub} style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0" }}><span>{sub}</span><span style={{ color:"#94a3b8" }}>{fmt(v)}</span></div>)}
+                </div>
+              </div>
+              {/* Préstamo card */}
+              <div style={{ flex:"1 1 240px", minWidth:220, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ background:"#1a1a2e20", borderBottom:"1px solid #1e3a5f", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ color:"#8b5cf6", fontSize:12, fontWeight:700 }}>Préstamo</span>
+                  <span style={{ color:"#f87171", fontSize:16, fontWeight:700 }}>{fmt(summary["G. Financiero – Préstamo"]||0)}</span>
+                </div>
+                <div style={{ padding:"10px 16px" }}>
+                  {Object.entries(entries.filter(e=>e.cat==="G. Financiero – Préstamo").reduce((acc,e)=>{ acc[e.sub]=(acc[e.sub]||0)+e.amount; return acc; }, {})).map(([sub,v]) => <div key={sub} style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0" }}><span>{sub}</span><span style={{ color:"#94a3b8" }}>{fmt(v)}</span></div>)}
+                </div>
+              </div>
+              {/* Depósito pignorado card */}
+              <div style={{ flex:"1 1 240px", minWidth:220, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ background:"#052e1620", borderBottom:"1px solid #1e3a5f", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ color:"#4ade80", fontSize:12, fontWeight:700 }}>Depósito pignorado</span>
+                  <span style={{ color:"#4ade80", fontSize:16, fontWeight:700 }}>+{fmt(depositAccrued)}</span>
+                </div>
+                <div style={{ padding:"10px 16px" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0" }}><span>Capital</span><span style={{ color:"#94a3b8" }}>{fmt(depositAmount)}</span></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0" }}><span>Tipo</span><span style={{ color:"#94a3b8" }}>1,70% anual</span></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0" }}><span>Desde</span><span style={{ color:"#94a3b8" }}>07/07/2025</span></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0" }}><span>Días</span><span style={{ color:"#94a3b8" }}>{daysSinceDeposit} días</span></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0", marginTop:4, paddingTop:4, borderTop:"1px solid #1e3a5f" }}><span>Intereses devengados</span><span style={{ color:"#4ade80", fontWeight:600 }}>+{fmt(depositAccrued)}</span></div>
+                </div>
+              </div>
+            </div>
+            {/* Net financial costs box */}
+            <div style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"14px 18px", maxWidth:400 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
+                <span style={{ fontSize:12, color:"#475569" }}>Total gastos financieros</span>
+                <span style={{ color:"#f87171", fontWeight:600 }}>{fmt(total)}</span>
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
+                <span style={{ fontSize:12, color:"#475569" }}>Ingresos depósito</span>
+                <span style={{ color:"#4ade80", fontWeight:600 }}>+{fmt(depositAccrued)}</span>
+              </div>
+              <div style={{ borderTop:"1px solid #1e3a5f", paddingTop:10, display:"flex", justifyContent:"space-between" }}>
+                <span style={{ fontSize:14, fontWeight:700, color:"#94a3b8" }}>G. Financieros netos</span>
+                <span style={{ fontSize:18, fontWeight:700, color:netFinancial>=0?"#4ade80":"#f87171" }}>{fmt(netFinancial)}</span>
+              </div>
+            </div>
+          </div>}
+
           <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
             {cats.map(c => <button key={c} onClick={()=>setFilterCat(c)} style={{ background:filterCat===c?"#1e3a5f":"transparent", border:`1px solid ${filterCat===c?"#3b82f6":"#1e3a5f"}`, color:filterCat===c?"#93c5fd":"#64748b", padding:"5px 12px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{c}</button>)}
           </div>
@@ -1528,37 +1595,40 @@ export default function App() {
                   </tbody>
                 </table>
               </div>}
-          {entries.length > 0 && <div style={{ marginTop:32, maxWidth:540 }}>
-            <div style={{ fontSize:13, fontWeight:700, color:"#94a3b8", marginBottom:16, letterSpacing:1, textTransform:"uppercase" }}>Resumen acumulado</div>
-            {Object.entries(summary).map(([cat,val]) => { const col = CAT_COLORS[cat]||{accent:"#888"}; const pct = total!==0?(val/total)*100:0; const subs = entries.filter(e=>e.cat===cat).reduce((acc,e)=>{ acc[e.sub]=(acc[e.sub]||0)+e.amount; return acc; }, {}); return <div key={cat} style={{ marginBottom:20 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}><span style={{ color:col.accent, fontSize:13 }}>{cat}</span><span style={{ color:"#f87171", fontWeight:700 }}>{fmt(val)}</span></div>
-              <div style={{ background:"#0d1f35", borderRadius:4, height:6, overflow:"hidden" }}><div style={{ background:col.accent, width:`${Math.abs(pct)}%`, height:"100%", borderRadius:4 }} /></div>
-              <div style={{ marginTop:8, paddingLeft:12, borderLeft:`2px solid ${col.accent}30` }}>{Object.entries(subs).map(([sub,v]) => <div key={sub} style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#475569", padding:"3px 0" }}><span>{sub}</span><span>{fmt(v)}</span></div>)}</div>
-            </div>; })}
-            <div style={{ borderTop:"1px solid #1e3a5f", paddingTop:16, display:"flex", justifyContent:"space-between", marginTop:8 }}><span style={{ fontSize:14, fontWeight:700, color:"#94a3b8" }}>TOTAL</span><span style={{ fontSize:18, fontWeight:700, color:"#f87171" }}>{fmt(total)}</span></div>
-            <div style={{ marginTop:16, padding:14, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, fontSize:12, color:"#475569" }}>Período: <span style={{ color:"#94a3b8" }}>{entries[0]?.date}</span> → <span style={{ color:"#94a3b8" }}>{entries[entries.length-1]?.date}</span> · {entries.length} movimientos</div>
-          </div>}
-        </div>}
+          {entries.length > 0 && <div style={{ marginTop:16, padding:14, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, fontSize:12, color:"#475569" }}>Período: <span style={{ color:"#94a3b8" }}>{entries[0]?.date}</span> → <span style={{ color:"#94a3b8" }}>{entries[entries.length-1]?.date}</span> · {entries.length} movimientos</div>}
+        </div>;
+        })()}
 
         {/* ══ BANCO ══ */}
         {tab==="banco" && (() => {
           const bankCC = bankMovements.filter(m => m.cuenta === "CC");
           const bankCP = bankMovements.filter(m => m.cuenta === "CP");
-          // Current saldos: entry with lowest orden (most recent in original statement)
           const saldoCC = bankCC.length > 0 ? bankCC.reduce((best, m) => (m.orden < best.orden ? m : best), bankCC[0]).saldo : 0;
           const saldoCP = bankCP.length > 0 ? bankCP.reduce((best, m) => (m.orden < best.orden ? m : best), bankCP[0]).saldo : 0;
-          const posNeta = saldoCC + saldoCP;
-          // Filter & sort
-          const fMov = bankMovements
-            .filter(m => bankFilterCuenta === "Todas" || m.cuenta === bankFilterCuenta)
-            .filter(m => !bankFilterTipo || m.tipo === bankFilterTipo)
-            .sort((a, b) => {
-              const da = parseDate(a.fecha), db = parseDate(b.fecha);
-              if (da.getTime() !== db.getTime()) return db - da;
-              return a.orden - b.orden;
+
+          // Excel-style filtered list
+          let fMov = [...bankMovements];
+          Object.entries(bankFilters).forEach(([col, selected]) => {
+            if (!selected) return;
+            if (selected.size === 0) { fMov = []; return; }
+            fMov = fMov.filter(m => {
+              const val = col === "tipo" ? (BANK_TYPES[m.tipo]||BANK_TYPES.otro).label : m[col];
+              return selected.has(val);
             });
-          const tiposPresent = [...new Set(bankMovements.map(m => m.tipo))].sort();
-          // Summary by type
+          });
+          fMov.sort((a, b) => {
+            const da = parseDate(a.fecha), db = parseDate(b.fecha);
+            if (da.getTime() !== db.getTime()) return db - da;
+            return a.orden - b.orden;
+          });
+
+          const bankUniqueVals = {
+            tipo: [...new Set(bankMovements.map(m => (BANK_TYPES[m.tipo]||BANK_TYPES.otro).label))],
+            cuenta: [...new Set(bankMovements.map(m => m.cuenta))],
+          };
+          const setBankFilter = (col, val) => setBankFilters(prev => ({ ...prev, [col]: val }));
+          const hasBankFilters = Object.values(bankFilters).some(v => v !== null && v !== undefined);
+
           const byTipo = {};
           bankMovements.forEach(m => {
             if (!byTipo[m.tipo]) byTipo[m.tipo] = { ing: 0, car: 0, n: 0 };
@@ -1566,6 +1636,17 @@ export default function App() {
             else byTipo[m.tipo].car += m.importe;
             byTipo[m.tipo].n++;
           });
+          const tiposPresent = [...new Set(bankMovements.map(m => m.tipo))].sort();
+
+          const bankCols = [
+            { key:"fecha", label:"Fecha" },
+            { key:"concepto", label:"Concepto" },
+            { key:"tipo", label:"Tipo", filterable:true },
+            { key:"cuenta", label:"Cta.", filterable:true },
+            { key:"importe", label:"Importe", align:"right" },
+            { key:"saldo", label:"Saldo", align:"right" },
+          ];
+
           return <div>
             {bankMovements.length === 0
               ? <div style={{ textAlign:"center", padding:"60px 0" }}>
@@ -1576,27 +1657,23 @@ export default function App() {
               : <>
                 {/* Balance cards */}
                 <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:24 }}>
-                  {[
-                    { label:"Cuenta Corriente", val:saldoCC, color:saldoCC>=0?"#4ade80":"#f87171", sub:`${bankCC.length} movimientos` },
-                    { label:"Póliza de Crédito", val:saldoCP, color:"#f87171", sub:`Dispuesto · ${bankCP.length} mov.` },
-                    { label:"Posición neta", val:posNeta, color:posNeta>=0?"#4ade80":"#f87171", sub:"CC + CP" },
-                  ].map(c => <div key={c.label} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"16px 20px", flex:"1 1 200px", minWidth:170 }}>
-                    <div style={{ fontSize:11, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>{c.label}</div>
-                    <div style={{ fontSize:22, fontWeight:700, color:c.color }}>{fmt(c.val)}</div>
-                    <div style={{ fontSize:11, color:"#334155", marginTop:2 }}>{c.sub}</div>
-                  </div>)}
-                </div>
-
-                {/* Filters */}
-                <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
-                  {["Todas","CC","CP"].map(c => <button key={c} onClick={()=>setBankFilterCuenta(c)} style={{ background:bankFilterCuenta===c?"#1e3a5f":"transparent", border:`1px solid ${bankFilterCuenta===c?"#3b82f6":"#1e3a5f"}`, color:bankFilterCuenta===c?"#93c5fd":"#64748b", padding:"5px 12px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{c}</button>)}
-                  <span style={{ color:"#1e3a5f", margin:"0 4px" }}>·</span>
-                  {tiposPresent.map(t => { const bt = BANK_TYPES[t]||BANK_TYPES.otro; return <button key={t} onClick={()=>setBankFilterTipo(bankFilterTipo===t?null:t)} style={{ background:bankFilterTipo===t?bt.bg:"transparent", border:`1px solid ${bankFilterTipo===t?bt.color:"#1e3a5f"}`, color:bankFilterTipo===t?bt.color:"#475569", padding:"4px 10px", borderRadius:20, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{bt.label}</button>; })}
-                  {(bankFilterCuenta!=="Todas"||bankFilterTipo) && <button onClick={()=>{setBankFilterCuenta("Todas");setBankFilterTipo(null)}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar</button>}
+                  <div style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"16px 20px", flex:"1 1 260px", minWidth:220 }}>
+                    <div style={{ fontSize:11, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>Cuenta Corriente</div>
+                    <div style={{ fontSize:22, fontWeight:700, color:saldoCC>=0?"#4ade80":"#f87171" }}>{fmt(saldoCC)}</div>
+                    <div style={{ fontSize:11, color:"#334155", marginTop:2 }}>{bankCC.length} movimientos</div>
+                  </div>
+                  <div style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"16px 20px", flex:"1 1 260px", minWidth:220 }}>
+                    <div style={{ fontSize:11, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>Póliza de Crédito</div>
+                    <div style={{ fontSize:22, fontWeight:700, color:"#f87171" }}>{fmt(saldoCP)}</div>
+                    <div style={{ fontSize:11, color:"#334155", marginTop:2 }}>Dispuesto · {bankCP.length} movimientos</div>
+                  </div>
                 </div>
 
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-                  <div style={{ fontSize:12, color:"#475569" }}>{fMov.length} de {bankMovements.length} movimientos</div>
+                  <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                    <span style={{ fontSize:12, color:"#475569" }}>{fMov.length} de {bankMovements.length} movimientos</span>
+                    {hasBankFilters && <button onClick={()=>{setBankFilters({});setBankFilterCol(null)}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
+                  </div>
                   <div style={{ display:"flex", gap:8 }}>
                     {!confirmBorrarBanco
                       ? <button onClick={()=>setConfirmBorrarBanco(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar todo</button>
@@ -1608,12 +1685,26 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Table */}
+                {/* Table with Excel-style header filters */}
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                     <thead><tr style={{ background:"#0d1f35" }}>
-                      {[{k:"fecha",l:"Fecha"},{k:"concepto",l:"Concepto"},{k:"tipo",l:"Tipo"},{k:"cuenta",l:"Cta."},{k:"importe",l:"Importe",a:"right"},{k:"saldo",l:"Saldo",a:"right"}].map(h =>
-                        <th key={h.k} style={{ padding:"9px 10px", textAlign:h.a||"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h.l}</th>)}
+                      {bankCols.map(col => (
+                        <th key={col.key} style={{ padding:"9px 10px", textAlign:col.align||"left", color:bankFilters[col.key]?"#3b82f6":"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap", position:"relative", cursor:col.filterable?"pointer":"default" }}
+                          onClick={()=>{ if(col.filterable) setBankFilterCol(bankFilterCol===col.key?null:col.key) }}>
+                          {col.label}
+                          {col.filterable && <span style={{ marginLeft:4, fontSize:8, color:bankFilters[col.key]?"#3b82f6":"#334155" }}>▼</span>}
+                          {col.filterable && <FilterDropdown
+                            column={col.key}
+                            values={bankUniqueVals[col.key]||[]}
+                            selected={bankFilters[col.key]||null}
+                            isOpen={bankFilterCol===col.key}
+                            onToggle={setBankFilterCol}
+                            onApply={(val)=>setBankFilter(col.key,val)}
+                            onSort={null}
+                          />}
+                        </th>
+                      ))}
                     </tr></thead>
                     <tbody>
                       {fMov.map((m, i) => {
