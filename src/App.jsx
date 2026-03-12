@@ -561,6 +561,10 @@ export default function App() {
   const [editDraft, setEditDraft]   = useState(null);
   // Escrituras from Supabase
   const [escriturasDB, setEscriturasDB] = useState([]);
+  // BD sort & filter
+  const [bdSort, setBdSort]         = useState("fecha-desc"); // fecha-desc, fecha-asc, reciente
+  const [bdFilterActivo, setBdFilterActivo] = useState("Todos");
+  const [bdFilterTipo, setBdFilterTipo] = useState("Todos");
 
   useEffect(() => {
     const loadData = async () => {
@@ -664,28 +668,24 @@ export default function App() {
     const autoSaved = [], needsReview = [], errors = [];
     for (const { result, fd } of results) {
       if (result.status === "fulfilled" && result.value) {
-        // Upload PDF to Supabase Storage
         let archivoPath = "";
         try {
-          const datePrefix = new Date().toISOString().slice(0,7); // "2025-10"
+          const datePrefix = new Date().toISOString().slice(0,7);
           const safeName = fd.name.replace(/[^a-zA-Z0-9._-]/g, "_");
           archivoPath = `facturas/${datePrefix}/${safeName}`;
           await uploadFile(fd.file, archivoPath);
         } catch { archivoPath = ""; }
 
         const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "", archivo_origen: archivoPath };
-        const hasDoubt = !inv.activo || (inv.notas && inv.notas.trim() !== "");
-        if (hasDoubt) needsReview.push({ ...inv, _file: fd.file });
-        else autoSaved.push({ ...inv, id: crypto.randomUUID() });
+        // ALL go to review — user always confirms
+        needsReview.push({ ...inv, _file: fd.file });
       } else errors.push(fd.name + ": " + (result.reason||"error"));
     }
-    if (autoSaved.length) addInvoices(autoSaved);
     setAnalyzing(false); setProgress({ current:0, total:0 }); setPdfFiles([]);
     if (errors.length) showFlash(`⚠ ${errors.length} error(es): ${errors[0]}`, "err");
-    if (needsReview.length === 0 && autoSaved.length === 0 && errors.length === 0) showFlash("No se procesó ningún documento.", "warn");
-    else if (needsReview.length === 0) showFlash(`✓ ${autoSaved.length} guardado${autoSaved.length!==1?"s":""} automáticamente.`);
-    else {
-      if (autoSaved.length) showFlash(`✓ ${autoSaved.length} auto. ${needsReview.length} requieren revisión.`, "warn");
+    if (needsReview.length === 0 && errors.length === 0) showFlash("No se procesó ningún documento.", "warn");
+    else if (needsReview.length > 0) {
+      showFlash(`${needsReview.length} documento${needsReview.length!==1?"s":""} listo${needsReview.length!==1?"s":""} para revisión.`, "warn");
       setReviewQueue(needsReview); setReviewIdx(0); setDraft(needsReview[0]);
     }
   };
@@ -777,6 +777,18 @@ export default function App() {
     return m.sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
   })();
 
+  // Sorted & filtered for BD tab
+  const bdMovements = (() => {
+    let list = [...allMovements];
+    if (bdFilterActivo !== "Todos") list = list.filter(m => m.activo === bdFilterActivo);
+    if (bdFilterTipo !== "Todos") list = list.filter(m => m.tipo === bdFilterTipo);
+    if (bdSort === "fecha-desc") list.sort((a,b) => parseDate(b.fecha) - parseDate(a.fecha));
+    else if (bdSort === "fecha-asc") list.sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
+    // "reciente" = order by position in original arrays (most recently added last → show first)
+    // We leave default order reversed
+    return list;
+  })();
+
   // ── Edit helpers ──
   const startEdit = (mov) => {
     setEditingId(mov.id);
@@ -805,9 +817,13 @@ export default function App() {
   };
   const openDoc = async (path) => {
     if (!path) { showFlash("Sin documento adjunto.", "warn"); return; }
-    const url = await getSignedUrl(path);
-    if (url) window.open(url, "_blank");
-    else showFlash("Error al obtener el documento.", "err");
+    try {
+      const url = await getSignedUrl(path);
+      if (url) window.open(url, "_blank");
+      else showFlash("Documento no encontrado en Storage.", "warn");
+    } catch {
+      showFlash("Error al acceder al documento.", "err");
+    }
   };
 
   // Facturas para IVA/IRPF — with quarter filtering
@@ -943,8 +959,8 @@ export default function App() {
 
         {/* ══ BASE DE DATOS ══ */}
         {tab==="bd" && <div>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-            <div style={{ fontSize:13, color:"#64748b" }}>{allMovements.length} movimientos totales</div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+            <div style={{ fontSize:13, color:"#64748b" }}>{bdMovements.length} de {allMovements.length} movimientos</div>
             <div style={{ display:"flex", gap:8 }}>
               {editMode && <button onClick={addManualRow} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>＋ Añadir fila</button>}
               <button onClick={()=>{ setEditMode(v=>!v); cancelEdit(); }} style={{ background:editMode?"#1e3a5f":"transparent", border:`1px solid ${editMode?"#3b82f6":"#1e3a5f"}`, color:editMode?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{editMode?"✓ Salir de edición":"✏ Editar"}</button>
@@ -958,13 +974,29 @@ export default function App() {
                   </span>}
             </div>
           </div>
+          {/* Filters & sort */}
+          <div style={{ display:"flex", gap:12, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
+            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+              <span style={{ fontSize:11, color:"#475569", marginRight:4 }}>Orden:</span>
+              {[["fecha-desc","Reciente ↓"],["fecha-asc","Antigua ↑"]].map(([k,l]) => <button key={k} onClick={()=>setBdSort(k)} style={{ background:bdSort===k?"#1e3a5f":"transparent", border:`1px solid ${bdSort===k?"#3b82f6":"#1e3a5f"}`, color:bdSort===k?"#93c5fd":"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{l}</button>)}
+            </div>
+            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+              <span style={{ fontSize:11, color:"#475569", marginRight:4 }}>Activo:</span>
+              {["Todos",...ACTIVOS].map(a => <button key={a} onClick={()=>setBdFilterActivo(a)} style={{ background:bdFilterActivo===a?"#1e3a5f":"transparent", border:`1px solid ${bdFilterActivo===a?"#3b82f6":"#1e3a5f"}`, color:bdFilterActivo===a?"#93c5fd":"#64748b", padding:"4px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{a}</button>)}
+            </div>
+            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+              <span style={{ fontSize:11, color:"#475569", marginRight:4 }}>Tipo:</span>
+              {["Todos","Factura","Escritura","G. Financiero"].map(t => <button key={t} onClick={()=>setBdFilterTipo(t)} style={{ background:bdFilterTipo===t?"#1e3a5f":"transparent", border:`1px solid ${bdFilterTipo===t?"#3b82f6":"#1e3a5f"}`, color:bdFilterTipo===t?"#93c5fd":"#64748b", padding:"4px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{t}</button>)}
+            </div>
+            {(bdFilterActivo!=="Todos"||bdFilterTipo!=="Todos"||bdSort!=="fecha-desc") && <button onClick={()=>{setBdSort("fecha-desc");setBdFilterActivo("Todos");setBdFilterTipo("Todos")}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
+          </div>
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead><tr style={{ background:"#0d1f35" }}>
                 {["Fecha","Período","Tipo","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total","Doc",""].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
               </tr></thead>
               <tbody>
-                {allMovements.map((mov,i) => {
+                {bdMovements.map((mov,i) => {
                   const t = (mov.cuantia||0)+(mov.iva||0)+(mov.otros||0);
                   const tc = mov.tipo==="Escritura"?"#4ade80":mov.tipo==="G. Financiero"?"#8b5cf6":"#60a5fa";
                   const isEditing = editingId === mov.id && mov.tipo === "Factura";
@@ -1024,42 +1056,88 @@ export default function App() {
         </div>}
 
         {/* ══ FACTURAS IVA/IRPF ══ */}
-        {tab==="facturas" && <div>
-          {/* Quarter filter */}
-          <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap" }}>
-            {["Todos", ...quarters].map(q => <button key={q} onClick={()=>setFilterQ(q)} style={{ background:filterQ===q?"#1e3a5f":"transparent", border:`1px solid ${filterQ===q?"#3b82f6":"#1e3a5f"}`, color:filterQ===q?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:filterQ===q?600:400 }}>{q}</button>)}
-          </div>
-          <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:20 }}>
-            {[["Base imponible",totalBaseIVA,"#60a5fa"],["IVA soportado",totalIVASop,"#fbbf24"],["Retenciones",totalRet,"#f59e0b"],["Neto",totalBaseIVA+totalIVASop+totalRet,"#f87171"]].map(([l,v,c]) =>
-              <div key={l} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"12px 18px", flex:"1 1 160px", minWidth:140 }}>
-                <div style={{ fontSize:10, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:4 }}>{l}</div>
-                <div style={{ fontSize:18, fontWeight:700, color:c }}>{fmt(v)}</div>
-              </div>)}
-          </div>
-          <div style={{ fontSize:12, color:"#475569", marginBottom:12 }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
-          <div style={{ overflowX:"auto" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-              <thead><tr style={{ background:"#0d1f35" }}>
-                {["Nº","Fecha","Período","Proveedor","Concepto","Activo","Categoría","Base","IVA","Retención","Total"].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Base","IVA","Retención","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
-              </tr></thead>
-              <tbody>
-                {facturasIVA.map((inv,i) => <tr key={inv.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
-                  <td style={{ padding:"8px 10px", color:"#475569", fontSize:11, whiteSpace:"nowrap" }}>{inv.numero||"—"}</td>
-                  <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{inv.fecha}</td>
-                  <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(inv.fecha)}</span></td>
-                  <td style={{ padding:"8px 10px", color:"#cbd5e1", maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.proveedor}</td>
-                  <td style={{ padding:"8px 10px", color:"#94a3b8", maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.concepto}</td>
-                  <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#60a5fa", padding:"2px 7px", borderRadius:4, fontSize:11, fontWeight:700 }}>{inv.activo}</span></td>
-                  <td style={{ padding:"8px 10px", color:"#64748b", fontSize:11, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.categoria}</td>
-                  <td style={{ padding:"8px 10px", textAlign:"right", color:"#e2e8f0" }}>{fmt(inv.cuantia||0)}</td>
-                  <td style={{ padding:"8px 10px", textAlign:"right", color:"#fbbf24", fontWeight:600 }}>{fmt(inv.iva||0)}</td>
-                  <td style={{ padding:"8px 10px", textAlign:"right", color:inv.otros?"#f59e0b":"#334155" }}>{inv.otros?fmt(inv.otros):"—"}</td>
-                  <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt((inv.cuantia||0)+(inv.iva||0)+(inv.otros||0))}</td>
-                </tr>)}
-              </tbody>
-            </table>
-          </div>
-        </div>}
+        {tab==="facturas" && (() => {
+          // Build quarterly data: { "2025": { "4T25": {base, iva, ret, count}, "3T25": ... }, ... }
+          const qData = {};
+          allFacturasIVA.forEach(inv => {
+            const q = getQuarter(inv.fecha);
+            const yr = "20" + q.slice(-2);
+            if (!qData[yr]) qData[yr] = {};
+            if (!qData[yr][q]) qData[yr][q] = { base:0, iva:0, ret:0, count:0 };
+            qData[yr][q].base += (inv.cuantia||0);
+            qData[yr][q].iva += (inv.iva||0);
+            qData[yr][q].ret += (inv.otros||0);
+            qData[yr][q].count++;
+          });
+          const years = Object.keys(qData).sort().reverse();
+
+          return <div>
+            {/* Quarter filter */}
+            <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap" }}>
+              {["Todos", ...quarters.slice().reverse()].map(q => <button key={q} onClick={()=>setFilterQ(q)} style={{ background:filterQ===q?"#1e3a5f":"transparent", border:`1px solid ${filterQ===q?"#3b82f6":"#1e3a5f"}`, color:filterQ===q?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:filterQ===q?600:400 }}>{q}</button>)}
+            </div>
+
+            {/* Quarterly summary cards by year */}
+            {years.map(yr => {
+              const qs = Object.keys(qData[yr]).sort().reverse(); // 4T, 3T, 2T, 1T
+              const yrBase = qs.reduce((s,q) => s + qData[yr][q].base, 0);
+              const yrIVA = qs.reduce((s,q) => s + qData[yr][q].iva, 0);
+              const yrRet = qs.reduce((s,q) => s + qData[yr][q].ret, 0);
+              return <div key={yr} style={{ marginBottom:24 }}>
+                <div style={{ fontSize:13, fontWeight:700, color:"#94a3b8", marginBottom:10 }}>{yr}</div>
+                <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:12 }}>
+                  {/* Annual total */}
+                  <div style={{ background:"#0d1f35", border:"1px solid #3b82f6", borderRadius:10, padding:"12px 16px", minWidth:160 }}>
+                    <div style={{ fontSize:10, color:"#3b82f6", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>Anual {yr}</div>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>Base</span><span style={{ color:"#60a5fa" }}>{fmt(yrBase)}</span></div>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>IVA</span><span style={{ color:"#fbbf24" }}>{fmt(yrIVA)}</span></div>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569" }}><span>Ret.</span><span style={{ color:"#f59e0b" }}>{fmt(yrRet)}</span></div>
+                  </div>
+                  {/* Each quarter */}
+                  {qs.map(q => <div key={q} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"12px 16px", minWidth:140, cursor:"pointer", outline:filterQ===q?"2px solid #3b82f6":"none" }} onClick={()=>setFilterQ(filterQ===q?"Todos":q)}>
+                    <div style={{ fontSize:10, color:"#64748b", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>{q} <span style={{ color:"#334155" }}>({qData[yr][q].count})</span></div>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>Base</span><span style={{ color:"#e2e8f0" }}>{fmt(qData[yr][q].base)}</span></div>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>IVA</span><span style={{ color:"#fbbf24" }}>{fmt(qData[yr][q].iva)}</span></div>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569" }}><span>Ret.</span><span style={{ color:"#f59e0b" }}>{fmt(qData[yr][q].ret)}</span></div>
+                  </div>)}
+                </div>
+              </div>;
+            })}
+
+            {/* Totals row */}
+            <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:20, paddingTop:12, borderTop:"1px solid #1e3a5f" }}>
+              {[["Base imponible",totalBaseIVA,"#60a5fa"],["IVA soportado",totalIVASop,"#fbbf24"],["Retenciones",totalRet,"#f59e0b"],["Neto",totalBaseIVA+totalIVASop+totalRet,"#f87171"]].map(([l,v,c]) =>
+                <div key={l} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"12px 18px", flex:"1 1 160px", minWidth:140 }}>
+                  <div style={{ fontSize:10, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:4 }}>{l}{filterQ!=="Todos"?` (${filterQ})`:""}</div>
+                  <div style={{ fontSize:18, fontWeight:700, color:c }}>{fmt(v)}</div>
+                </div>)}
+            </div>
+
+            <div style={{ fontSize:12, color:"#475569", marginBottom:12 }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead><tr style={{ background:"#0d1f35" }}>
+                  {["Nº","Fecha","Período","Proveedor","Concepto","Activo","Categoría","Base","IVA","Retención","Total"].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Base","IVA","Retención","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {facturasIVA.map((inv,i) => <tr key={inv.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
+                    <td style={{ padding:"8px 10px", color:"#475569", fontSize:11, whiteSpace:"nowrap" }}>{inv.numero||"—"}</td>
+                    <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{inv.fecha}</td>
+                    <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(inv.fecha)}</span></td>
+                    <td style={{ padding:"8px 10px", color:"#cbd5e1", maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.proveedor}</td>
+                    <td style={{ padding:"8px 10px", color:"#94a3b8", maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.concepto}</td>
+                    <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#60a5fa", padding:"2px 7px", borderRadius:4, fontSize:11, fontWeight:700 }}>{inv.activo}</span></td>
+                    <td style={{ padding:"8px 10px", color:"#64748b", fontSize:11, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{inv.categoria}</td>
+                    <td style={{ padding:"8px 10px", textAlign:"right", color:"#e2e8f0" }}>{fmt(inv.cuantia||0)}</td>
+                    <td style={{ padding:"8px 10px", textAlign:"right", color:"#fbbf24", fontWeight:600 }}>{fmt(inv.iva||0)}</td>
+                    <td style={{ padding:"8px 10px", textAlign:"right", color:inv.otros?"#f59e0b":"#334155" }}>{inv.otros?fmt(inv.otros):"—"}</td>
+                    <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt((inv.cuantia||0)+(inv.iva||0)+(inv.otros||0))}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>
+          </div>;
+        })()}
 
         {/* ══ DASHBOARD ══ */}
         {tab==="dashboard" && <DashboardTab invoices={invoices} />}
