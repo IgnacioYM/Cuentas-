@@ -552,6 +552,7 @@ export default function App() {
   const [draft, setDraft]           = useState(null);
   const [splitMode, setSplitMode]   = useState(false);
   const [splits, setSplits]         = useState([{activo:"",pct:50},{activo:"",pct:50}]);
+  const [previewFile, setPreviewFile] = useState(null);
   const totalPct = splits.reduce((a,s)=>a+(s.pct||0), 0);
   const splitValid = splits.every(s=>s.activo) && Math.abs(totalPct-100)<0.01;
   const invoicesRef = useRef([]);
@@ -853,58 +854,6 @@ export default function App() {
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
   };
 
-  // Export Reporting — exact Excel format: Bahnschrift Light 16pt, #,##0
-  const exportReporting = () => {
-    const cats = [
-      "Adquisición (incluye gastos e impuestos)",
-      "Costes legales",
-      "Capex",
-      "Costes de posesión",
-      "Costes de implementación (SPV, abogados, etc.)",
-      "Opex",
-      "Comisión de gestión",
-      "Costes financieros netos",
-    ];
-    // Sum Total 2 (cuantia + iva + otros) per category from all invoices
-    const catTotals = {};
-    cats.forEach(c => { catTotals[c] = 0; });
-    invoices.forEach(inv => {
-      const total2 = (inv.cuantia||0) + (inv.iva||0) + (inv.otros||0);
-      if (catTotals[inv.categoria] !== undefined) catTotals[inv.categoria] += total2;
-    });
-    // Add gastos financieros to "Costes financieros netos"
-    catTotals["Costes financieros netos"] = entries.reduce((s,e) => s + Math.abs(e.amount), 0);
-    const grandTotal = cats.reduce((s,c) => s + catTotals[c], 0);
-
-    // Build worksheet
-    const wsData = [
-      [null, null, "Actual"],
-      ...cats.map(c => [null, c, Math.round(catTotals[c])]),
-      [null, "Total", Math.round(grandTotal)],
-    ];
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // Column widths
-    ws["!cols"] = [{wch:3}, {wch:50}, {wch:14}];
-
-    // Number format for column C (indices C2-C10)
-    for (let r = 1; r <= wsData.length; r++) {
-      const cell = ws[XLSX.utils.encode_cell({r, c:2})];
-      if (cell && typeof cell.v === "number") cell.z = "#,##0";
-    }
-    // Bold for header and total
-    const headerCell = ws["C1"];
-    if (headerCell) headerCell.s = { font: { bold: true } };
-    const totalLabelCell = ws[XLSX.utils.encode_cell({r: wsData.length-1, c:1})];
-    if (totalLabelCell) totalLabelCell.s = { font: { bold: true } };
-    const totalValCell = ws[XLSX.utils.encode_cell({r: wsData.length-1, c:2})];
-    if (totalValCell) totalValCell.s = { font: { bold: true } };
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Reporting");
-    XLSX.writeFile(wb, "Export_reporting.xlsx");
-  };
-
   if (!loaded) return <div style={{ background:"#080f1a", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", color:"#3b82f6", fontFamily:"monospace" }}>Cargando…</div>;
 
   const TABS = [["importar","⬆ Importar"],["bd","🗄 Base de datos"],["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["gf","🏦 G. Financieros"],["resumen","📈 Resumen"]];
@@ -950,25 +899,26 @@ export default function App() {
         {/* ══ IMPORTAR ══ */}
         {tab==="importar" && <div>
           <div style={{ display:"flex", gap:32, flexWrap:"wrap", alignItems:"flex-start" }}>
-            <div style={{ flex:"0 0 300px" }}>
+            {/* Left: PDF upload */}
+            <div style={{ flex:"1 1 300px", minWidth:280 }}>
               <div style={{ fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>Documentos PDF</div>
-              <div style={{ fontSize:12, color:"#475569", marginBottom:16, lineHeight:1.7 }}>Arrastra facturas, escrituras, ITP o cualquier documento. Claude los analiza y clasifica.</div>
+              <div style={{ fontSize:12, color:"#475569", marginBottom:16, lineHeight:1.7 }}>Arrastra facturas, escrituras, ITP o cualquier documento.</div>
               <PdfDropZone files={pdfFiles} disabled={analyzing} onFiles={newFiles => setPdfFiles(prev => { const names = new Set(prev.map(f=>f.name)); return [...prev, ...newFiles.filter(f=>!names.has(f.name))]; })} />
               {pdfFiles.length > 0 && reviewQueue.length === 0 && <button onClick={analyzeAll} disabled={analyzing} style={{ marginTop:14, width:"100%", background:analyzing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"11px", borderRadius:8, cursor:analyzing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{analyzing ? `Analizando… (${progress.current}/${progress.total})` : `✦ Analizar ${pdfFiles.length>1?pdfFiles.length+" documentos":"documento"} con IA`}</button>}
-              {analyzing && progress.total > 0 && <div style={{ marginTop:8 }}><div style={{ background:"#1e3a5f", borderRadius:4, height:4, overflow:"hidden" }}><div style={{ background:"#3b82f6", height:"100%", borderRadius:4, transition:"width 0.4s", width:`${(progress.current/progress.total)*100}%` }} /></div><div style={{ fontSize:11, color:"#475569", marginTop:4, textAlign:"center" }}>{progress.current < progress.total ? `Lote ${Math.ceil((progress.current||1)/2)} de ${Math.ceil(progress.total/2)}` : "Finalizando…"}</div></div>}
+              {analyzing && progress.total > 0 && <div style={{ marginTop:8 }}><div style={{ background:"#1e3a5f", borderRadius:4, height:4, overflow:"hidden" }}><div style={{ background:"#3b82f6", height:"100%", borderRadius:4, transition:"width 0.4s", width:`${(progress.current/progress.total)*100}%` }} /></div></div>}
               {!apiKey && <div style={{ marginTop:10, fontSize:11, color:"#f59e0b" }}>⚠ Configura la API key antes de analizar</div>}
-
-              <div style={{ borderTop:"1px solid #1e3a5f", marginTop:28, paddingTop:24 }}>
-                <div style={{ fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>Extractos bancarios</div>
-                <div style={{ fontSize:12, color:"#475569", marginBottom:16, lineHeight:1.7 }}>Para gastos financieros (intereses, comisiones, seguros).</div>
-                <DropZone label="CC" name="Cuenta Corriente" file={ccFile} onFile={setCcFile} />
-                <DropZone label="CP" name="Póliza de Crédito" file={cpFile} onFile={setCpFile} />
-                <button onClick={handleImport} disabled={importing} style={{ background:importing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:importing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{importing ? "Procesando…" : "Importar extractos"}</button>
-              </div>
+            </div>
+            {/* Right: Extractos bancarios */}
+            <div style={{ flex:"1 1 300px", minWidth:280 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>Extractos bancarios</div>
+              <div style={{ fontSize:12, color:"#475569", marginBottom:16, lineHeight:1.7 }}>Para gastos financieros (intereses, comisiones, seguros).</div>
+              <DropZone label="CC" name="Cuenta Corriente" file={ccFile} onFile={setCcFile} />
+              <DropZone label="CP" name="Póliza de Crédito" file={cpFile} onFile={setCpFile} />
+              <button onClick={handleImport} disabled={importing} style={{ background:importing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:importing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{importing ? "Procesando…" : "Importar extractos"}</button>
             </div>
           </div>
 
-          {/* ── Review table ── */}
+          {/* ── Review table (no PDF viewer unless click) ── */}
           {reviewQueue.length > 0 && <div style={{ marginTop:28 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ fontSize:15, fontWeight:700, color:"#f59e0b" }}>⚠ {reviewQueue.length} documentos pendientes de revisión</div>
@@ -980,46 +930,48 @@ export default function App() {
                   addInvoices(toSave);
                   const remaining = reviewQueue.filter(inv => !(inv.fecha && inv.proveedor && inv.categoria && inv.cuantia && inv.activo));
                   setReviewQueue(remaining);
+                  setPreviewFile(null);
                   if (remaining.length === 0) showFlash(`✓ ${toSave.length} documentos guardados.`);
                   else showFlash(`✓ ${toSave.length} guardados. ${remaining.length} incompletos.`, "warn");
                 }} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"8px 20px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600 }}>✓ Confirmar todos</button>
-                <button onClick={()=>{ setReviewQueue([]); showFlash("Revisión descartada.","warn"); }} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>Descartar todos</button>
+                <button onClick={()=>{ setReviewQueue([]); setPreviewFile(null); showFlash("Revisión descartada.","warn"); }} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>Descartar todos</button>
               </div>
             </div>
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-                <thead><tr style={{ background:"#0d1f35" }}>
-                  {["Fecha","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total","Notas","Doc",""].map(h => <th key={h} style={{ padding:"8px 8px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
-                </tr></thead>
-                <tbody>
-                  {reviewQueue.map((inv,i) => {
-                    const t = (inv.cuantia||0)+(inv.iva||0)+(inv.otros||0);
-                    const missing = !inv.activo || !inv.categoria;
-                    const upd = (field, val) => setReviewQueue(prev => prev.map((r,j) => j===i ? {...r, [field]:val} : r));
-                    return <tr key={i} style={{ background:missing?"#1f0a0a10":i%2===0?"#0a1628":"#080f1a" }}>
-                      <td style={{ padding:"4px 6px" }}><input value={inv.fecha||""} onChange={e=>upd("fecha",e.target.value)} style={{ width:80, background:"#080f1a", border:`1px solid ${inv.fecha?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
-                      <td style={{ padding:"4px 6px" }}><input value={inv.proveedor||""} onChange={e=>upd("proveedor",e.target.value)} style={{ width:120, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
-                      <td style={{ padding:"4px 6px" }}><input value={inv.concepto||""} onChange={e=>upd("concepto",e.target.value)} style={{ width:140, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
-                      <td style={{ padding:"4px 6px" }}><select value={inv.activo||""} onChange={e=>upd("activo",e.target.value)} style={{ background:"#080f1a", border:`1px solid ${inv.activo?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select></td>
-                      <td style={{ padding:"4px 6px" }}><select value={inv.categoria||""} onChange={e=>upd("categoria",e.target.value)} style={{ width:120, background:"#080f1a", border:`1px solid ${inv.categoria?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 4px", fontFamily:"inherit", fontSize:11, outline:"none" }}><option value="">—</option>{CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
-                      <td style={{ padding:"4px 6px" }}><input type="number" value={inv.cuantia||""} onChange={e=>upd("cuantia",parseFloat(e.target.value)||0)} style={{ width:70, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
-                      <td style={{ padding:"4px 6px" }}><input type="number" value={inv.iva||""} onChange={e=>upd("iva",parseFloat(e.target.value)||0)} style={{ width:60, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
-                      <td style={{ padding:"4px 6px" }}><input type="number" value={inv.otros||""} onChange={e=>upd("otros",parseFloat(e.target.value)||null)} style={{ width:60, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
-                      <td style={{ padding:"4px 6px", textAlign:"right", color:"#f87171", fontWeight:600, fontSize:12 }}>{fmt(t)}</td>
-                      <td style={{ padding:"4px 6px", color:"#fbbf24", fontSize:11, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={inv.notas||""}>{inv.notas||"—"}</td>
-                      <td style={{ padding:"4px 6px", textAlign:"center" }}>
-                        {inv._file ? <button onClick={()=>{setDraft(inv)}} title="Ver PDF" style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📄</button> : "—"}
-                      </td>
-                      <td style={{ padding:"4px 6px", textAlign:"center" }}>
-                        <button onClick={()=>setReviewQueue(prev=>prev.filter((_,j)=>j!==i))} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>
-                      </td>
-                    </tr>;
-                  })}
-                </tbody>
-              </table>
+            <div style={{ display:"flex", gap:20, alignItems:"flex-start" }}>
+              <div style={{ flex:1, overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                  <thead><tr style={{ background:"#0d1f35" }}>
+                    {["Fecha","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total","Notas","Doc",""].map(h => <th key={h} style={{ padding:"8px 8px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {reviewQueue.map((inv,i) => {
+                      const t = (inv.cuantia||0)+(inv.iva||0)+(inv.otros||0);
+                      const upd = (field, val) => setReviewQueue(prev => prev.map((r,j) => j===i ? {...r, [field]:val} : r));
+                      return <tr key={i} style={{ background:(!inv.activo||!inv.categoria)?"#1f0a0a":i%2===0?"#0a1628":"#080f1a" }}>
+                        <td style={{ padding:"4px 6px" }}><input value={inv.fecha||""} onChange={e=>upd("fecha",e.target.value)} style={{ width:80, background:"#080f1a", border:`1px solid ${inv.fecha?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                        <td style={{ padding:"4px 6px" }}><input value={inv.proveedor||""} onChange={e=>upd("proveedor",e.target.value)} style={{ width:120, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                        <td style={{ padding:"4px 6px" }}><input value={inv.concepto||""} onChange={e=>upd("concepto",e.target.value)} style={{ width:140, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                        <td style={{ padding:"4px 6px" }}><select value={inv.activo||""} onChange={e=>upd("activo",e.target.value)} style={{ background:"#080f1a", border:`1px solid ${inv.activo?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select></td>
+                        <td style={{ padding:"4px 6px" }}><select value={inv.categoria||""} onChange={e=>upd("categoria",e.target.value)} style={{ width:120, background:"#080f1a", border:`1px solid ${inv.categoria?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 4px", fontFamily:"inherit", fontSize:11, outline:"none" }}><option value="">—</option>{CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
+                        <td style={{ padding:"4px 6px" }}><input type="number" value={inv.cuantia||""} onChange={e=>upd("cuantia",parseFloat(e.target.value)||0)} style={{ width:70, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                        <td style={{ padding:"4px 6px" }}><input type="number" value={inv.iva||""} onChange={e=>upd("iva",parseFloat(e.target.value)||0)} style={{ width:60, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                        <td style={{ padding:"4px 6px" }}><input type="number" value={inv.otros||""} onChange={e=>upd("otros",parseFloat(e.target.value)||null)} style={{ width:60, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                        <td style={{ padding:"4px 6px", textAlign:"right", color:"#f87171", fontWeight:600, fontSize:12 }}>{fmt(t)}</td>
+                        <td style={{ padding:"4px 6px", color:"#fbbf24", fontSize:11, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={inv.notas||""}>{inv.notas||"—"}</td>
+                        <td style={{ padding:"4px 6px", textAlign:"center" }}>
+                          {inv._file ? <button onClick={()=>setPreviewFile(previewFile===inv._file?null:inv._file)} title="Ver PDF" style={{ background:"transparent", border:"none", color:previewFile===inv._file?"#4ade80":"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📄</button> : "—"}
+                        </td>
+                        <td style={{ padding:"4px 6px", textAlign:"center" }}>
+                          <button onClick={()=>setReviewQueue(prev=>prev.filter((_,j)=>j!==i))} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>
+                        </td>
+                      </tr>;
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {/* PDF preview — only when user clicks Doc */}
+              {previewFile && <div style={{ flex:"0 0 400px", minWidth:300 }}><PdfViewer file={previewFile} /></div>}
             </div>
-            {/* PDF viewer for selected review item */}
-            {draft && draft._file && <div style={{ marginTop:16, maxWidth:600 }}><PdfViewer file={draft._file} /></div>}
           </div>}
         </div>}
 
@@ -1168,13 +1120,12 @@ export default function App() {
 
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
               <div style={{ fontSize:12, color:"#475569" }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
-              <button onClick={exportReporting} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>📥 Export reporting</button>
             </div>
 
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                 <thead><tr style={{ background:"#0d1f35" }}>
-                  {["Nº","Fecha","Período","Proveedor","Concepto","Activo","Categoría","Base","IVA","Retención","Total"].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Base","IVA","Retención","Total"].includes(h)?"right":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                  {["Nº","Fecha","Período","Proveedor","Concepto","Activo","Categoría","Base","IVA","Retención","Total","Doc"].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Base","IVA","Retención","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {facturasIVA.map((inv,i) => <tr key={inv.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
@@ -1189,6 +1140,9 @@ export default function App() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#fbbf24", fontWeight:600 }}>{fmt(inv.iva||0)}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:inv.otros?"#f59e0b":"#334155" }}>{inv.otros?fmt(inv.otros):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt((inv.cuantia||0)+(inv.iva||0)+(inv.otros||0))}</td>
+                    <td style={{ padding:"8px 6px", textAlign:"center" }}>
+                      {inv.archivo_origen ? <button onClick={()=>openDoc(inv.archivo_origen)} style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button> : <span style={{ color:"#1e3a5f" }}>—</span>}
+                    </td>
                   </tr>)}
                 </tbody>
               </table>
@@ -1197,7 +1151,7 @@ export default function App() {
         })()}
 
         {/* ══ DASHBOARD ══ */}
-        {tab==="dashboard" && <DashboardTab invoices={invoices} />}
+        {tab==="dashboard" && <DashboardTab invoices={invoices} entries={entries} />}
 
         {/* ══ G. FINANCIEROS ══ */}
         {tab==="gf" && <div>
