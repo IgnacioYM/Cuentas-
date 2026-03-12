@@ -562,9 +562,11 @@ export default function App() {
   // Escrituras from Supabase
   const [escriturasDB, setEscriturasDB] = useState([]);
   // BD sort & filter
-  const [bdSort, setBdSort]         = useState("fecha-desc"); // fecha-desc, fecha-asc, reciente
+  const [bdSort, setBdSort]         = useState("fecha-desc");
   const [bdFilterActivo, setBdFilterActivo] = useState("Todos");
   const [bdFilterTipo, setBdFilterTipo] = useState("Todos");
+  const [bdFilterCat, setBdFilterCat] = useState(null);
+  const [bdFilterProv, setBdFilterProv] = useState(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -782,10 +784,10 @@ export default function App() {
     let list = [...allMovements];
     if (bdFilterActivo !== "Todos") list = list.filter(m => m.activo === bdFilterActivo);
     if (bdFilterTipo !== "Todos") list = list.filter(m => m.tipo === bdFilterTipo);
+    if (bdFilterCat) list = list.filter(m => m.categoria === bdFilterCat);
+    if (bdFilterProv) list = list.filter(m => m.proveedor === bdFilterProv);
     if (bdSort === "fecha-desc") list.sort((a,b) => parseDate(b.fecha) - parseDate(a.fecha));
     else if (bdSort === "fecha-asc") list.sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
-    // "reciente" = order by position in original arrays (most recently added last → show first)
-    // We leave default order reversed
     return list;
   })();
 
@@ -829,7 +831,11 @@ export default function App() {
   // Facturas para IVA/IRPF — with quarter filtering
   const allFacturasIVA = invoices.filter(inv => (inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim()));
   const quarters = [...new Set(allFacturasIVA.map(inv => getQuarter(inv.fecha)).filter(Boolean))].sort();
-  const facturasIVA = filterQ === "Todos" ? allFacturasIVA : allFacturasIVA.filter(inv => getQuarter(inv.fecha) === filterQ);
+  // filterQ can be "Todos", "2025" (year), or "4T25" (quarter)
+  const facturasIVA = filterQ === "Todos" ? allFacturasIVA
+    : filterQ.length === 4 && !filterQ.includes("T") // year like "2025"
+      ? allFacturasIVA.filter(inv => { const q = getQuarter(inv.fecha); return q && "20"+q.slice(-2) === filterQ; })
+      : allFacturasIVA.filter(inv => getQuarter(inv.fecha) === filterQ);
   const totalBaseIVA = facturasIVA.reduce((s,inv) => s+(inv.cuantia||0), 0);
   const totalIVASop = facturasIVA.reduce((s,inv) => s+(inv.iva||0), 0);
   const totalRet = facturasIVA.reduce((s,inv) => s+(inv.otros||0), 0);
@@ -845,6 +851,58 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href=url; a.download="facturas_arena_nexus.csv"; a.click();
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  };
+
+  // Export Reporting — exact Excel format: Bahnschrift Light 16pt, #,##0
+  const exportReporting = () => {
+    const cats = [
+      "Adquisición (incluye gastos e impuestos)",
+      "Costes legales",
+      "Capex",
+      "Costes de posesión",
+      "Costes de implementación (SPV, abogados, etc.)",
+      "Opex",
+      "Comisión de gestión",
+      "Costes financieros netos",
+    ];
+    // Sum Total 2 (cuantia + iva + otros) per category from all invoices
+    const catTotals = {};
+    cats.forEach(c => { catTotals[c] = 0; });
+    invoices.forEach(inv => {
+      const total2 = (inv.cuantia||0) + (inv.iva||0) + (inv.otros||0);
+      if (catTotals[inv.categoria] !== undefined) catTotals[inv.categoria] += total2;
+    });
+    // Add gastos financieros to "Costes financieros netos"
+    catTotals["Costes financieros netos"] = entries.reduce((s,e) => s + Math.abs(e.amount), 0);
+    const grandTotal = cats.reduce((s,c) => s + catTotals[c], 0);
+
+    // Build worksheet
+    const wsData = [
+      [null, null, "Actual"],
+      ...cats.map(c => [null, c, Math.round(catTotals[c])]),
+      [null, "Total", Math.round(grandTotal)],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    // Column widths
+    ws["!cols"] = [{wch:3}, {wch:50}, {wch:14}];
+
+    // Number format for column C (indices C2-C10)
+    for (let r = 1; r <= wsData.length; r++) {
+      const cell = ws[XLSX.utils.encode_cell({r, c:2})];
+      if (cell && typeof cell.v === "number") cell.z = "#,##0";
+    }
+    // Bold for header and total
+    const headerCell = ws["C1"];
+    if (headerCell) headerCell.s = { font: { bold: true } };
+    const totalLabelCell = ws[XLSX.utils.encode_cell({r: wsData.length-1, c:1})];
+    if (totalLabelCell) totalLabelCell.s = { font: { bold: true } };
+    const totalValCell = ws[XLSX.utils.encode_cell({r: wsData.length-1, c:2})];
+    if (totalValCell) totalValCell.s = { font: { bold: true } };
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Reporting");
+    XLSX.writeFile(wb, "Export_reporting.xlsx");
   };
 
   if (!loaded) return <div style={{ background:"#080f1a", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", color:"#3b82f6", fontFamily:"monospace" }}>Cargando…</div>;
@@ -896,9 +954,8 @@ export default function App() {
               <div style={{ fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>Documentos PDF</div>
               <div style={{ fontSize:12, color:"#475569", marginBottom:16, lineHeight:1.7 }}>Arrastra facturas, escrituras, ITP o cualquier documento. Claude los analiza y clasifica.</div>
               <PdfDropZone files={pdfFiles} disabled={analyzing} onFiles={newFiles => setPdfFiles(prev => { const names = new Set(prev.map(f=>f.name)); return [...prev, ...newFiles.filter(f=>!names.has(f.name))]; })} />
-              {pdfFiles.length > 0 && !draft && <button onClick={analyzeAll} disabled={analyzing} style={{ marginTop:14, width:"100%", background:analyzing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"11px", borderRadius:8, cursor:analyzing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{analyzing ? `Analizando… (${progress.current}/${progress.total})` : `✦ Analizar ${pdfFiles.length>1?pdfFiles.length+" documentos":"documento"} con IA`}</button>}
+              {pdfFiles.length > 0 && reviewQueue.length === 0 && <button onClick={analyzeAll} disabled={analyzing} style={{ marginTop:14, width:"100%", background:analyzing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"11px", borderRadius:8, cursor:analyzing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{analyzing ? `Analizando… (${progress.current}/${progress.total})` : `✦ Analizar ${pdfFiles.length>1?pdfFiles.length+" documentos":"documento"} con IA`}</button>}
               {analyzing && progress.total > 0 && <div style={{ marginTop:8 }}><div style={{ background:"#1e3a5f", borderRadius:4, height:4, overflow:"hidden" }}><div style={{ background:"#3b82f6", height:"100%", borderRadius:4, transition:"width 0.4s", width:`${(progress.current/progress.total)*100}%` }} /></div><div style={{ fontSize:11, color:"#475569", marginTop:4, textAlign:"center" }}>{progress.current < progress.total ? `Lote ${Math.ceil((progress.current||1)/2)} de ${Math.ceil(progress.total/2)}` : "Finalizando…"}</div></div>}
-              {reviewQueue.length > 0 && draft && <div style={{ marginTop:10, padding:"8px 12px", background:"#1c1917", border:"1px solid #f59e0b", borderRadius:8, fontSize:12, color:"#fbbf24" }}>⚠ Revisión {reviewIdx+1} de {reviewQueue.length}</div>}
               {!apiKey && <div style={{ marginTop:10, fontSize:11, color:"#f59e0b" }}>⚠ Configura la API key antes de analizar</div>}
 
               <div style={{ borderTop:"1px solid #1e3a5f", marginTop:28, paddingTop:24 }}>
@@ -909,52 +966,61 @@ export default function App() {
                 <button onClick={handleImport} disabled={importing} style={{ background:importing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:importing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{importing ? "Procesando…" : "Importar extractos"}</button>
               </div>
             </div>
-
-            {draft && draft._file && <div style={{ flex:"1 1 360px", minWidth:300, maxWidth:500 }}><PdfViewer file={draft._file} /></div>}
-
-            {draft && <div style={{ flex:"1 1 320px", minWidth:280, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:12, padding:20 }}>
-              <div style={{ fontSize:13, color:"#3b82f6", marginBottom:16, fontWeight:600 }}>Revisa y confirma
-                {draft.notas && draft.notas.trim() && <div style={{ marginTop:6, padding:"8px 12px", background:"#1c1917", border:"1px solid #f59e0b", borderRadius:6, color:"#fbbf24", fontSize:12, fontWeight:400 }}>⚠ {draft.notas}</div>}
-              </div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 16px" }}>
-                <Field label="Fecha" value={draft.fecha} onChange={v=>setDraft(d=>({...d,fecha:v}))} required />
-                {!splitMode ? <Field label="Activo" value={draft.activo} onChange={v=>setDraft(d=>({...d,activo:v}))} required options={ACTIVOS} /> : <div style={{ display:"flex", alignItems:"center", fontSize:11, color:"#475569" }}>Activo → reparto ↓</div>}
-                <div style={{ gridColumn:"span 2" }}><Field label="Proveedor" value={draft.proveedor} onChange={v=>setDraft(d=>({...d,proveedor:v}))} required /></div>
-                <div style={{ gridColumn:"span 2" }}><Field label="Concepto" value={draft.concepto} onChange={v=>setDraft(d=>({...d,concepto:v}))} required /></div>
-                <div style={{ gridColumn:"span 2" }}><Field label="Categoría" value={draft.categoria} onChange={v=>setDraft(d=>({...d,categoria:v}))} required options={CATEGORIAS} /></div>
-                <Field label="Cuantía (base)" value={String(draft.cuantia||"")} onChange={v=>setDraft(d=>({...d,cuantia:parseFloat(v)||0}))} required type="number" />
-                <Field label="IVA" value={String(draft.iva||"")} onChange={v=>setDraft(d=>({...d,iva:parseFloat(v)||0}))} type="number" />
-                <Field label="Retención (neg)" value={String(draft.otros||"")} onChange={v=>setDraft(d=>({...d,otros:parseFloat(v)||null}))} type="number" />
-                <div style={{ color:"#94a3b8", fontSize:13, display:"flex", alignItems:"center", gap:8 }}>Total: <span style={{ color:"#f87171", fontWeight:700 }}>{fmt((draft.cuantia||0)+(draft.iva||0)+(draft.otros||0))}</span></div>
-              </div>
-              <div style={{ marginTop:4, marginBottom:16 }}>
-                <div style={{ fontSize:11, color:"#475569", marginBottom:4, letterSpacing:1, textTransform:"uppercase" }}>Comentario</div>
-                <textarea value={draft.comentario||""} onChange={e=>setDraft(d=>({...d,comentario:e.target.value}))} placeholder="Aclaraciones…" rows={2} style={{ width:"100%", background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:6, color:"#94a3b8", padding:"8px 10px", fontFamily:"inherit", fontSize:12, outline:"none", resize:"vertical", boxSizing:"border-box" }} />
-              </div>
-              <div style={{ marginBottom:14, borderTop:"1px solid #1e3a5f", paddingTop:14, display:"flex", alignItems:"center", gap:10, cursor:"pointer" }} onClick={()=>setSplitMode(v=>!v)}>
-                <div style={{ width:36, height:20, borderRadius:10, background:splitMode?"#1d4ed8":"#1e3a5f", position:"relative", transition:"background 0.2s", flexShrink:0 }}><div style={{ position:"absolute", top:3, left:splitMode?18:3, width:14, height:14, borderRadius:"50%", background:splitMode?"#93c5fd":"#475569", transition:"left 0.2s" }} /></div>
-                <span style={{ fontSize:12, color:splitMode?"#93c5fd":"#475569", userSelect:"none" }}>Repartir entre varios activos</span>
-              </div>
-              {splitMode && <div style={{ background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:10, padding:14, marginBottom:16 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-                  <span style={{ fontSize:11, color:"#475569", letterSpacing:1, textTransform:"uppercase" }}>Distribución</span>
-                  <div style={{ display:"flex", gap:8 }}>
-                    <button onClick={()=>{ const p=parseFloat((100/splits.length).toFixed(4)); setSplits(prev=>prev.map((s,i)=>({...s,pct:i===prev.length-1?100-p*(prev.length-1):p}))); }} style={{ background:"transparent", border:"1px solid #1e3a5f", color:"#64748b", padding:"3px 10px", borderRadius:5, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>Igualar %</button>
-                    <button onClick={()=>setSplits(prev=>[...prev,{activo:"",pct:0}])} style={{ background:"transparent", border:"1px solid #1e3a5f", color:"#64748b", padding:"3px 10px", borderRadius:5, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>+ Añadir</button>
-                  </div>
-                </div>
-                {splits.map((s,i) => <SplitRow key={i} split={s} index={i} count={splits.length} base={draft.cuantia} iva={draft.iva} otros={draft.otros} onChange={(idx,key,val)=>setSplits(prev=>prev.map((sp,k)=>k===idx?{...sp,[key]:val}:sp))} onRemove={idx=>setSplits(prev=>prev.filter((_,k)=>k!==idx))} />)}
-                <div style={{ marginTop:8, display:"flex", justifyContent:"space-between", fontSize:12 }}>
-                  <span style={{ color:Math.abs(totalPct-100)<0.01?"#4ade80":"#f87171" }}>{totalPct.toFixed(1)}% {Math.abs(totalPct-100)<0.01?"✓":`(falta ${(100-totalPct).toFixed(1)}%)`}</span>
-                  <span style={{ color:"#475569" }}>{fmt((draft.cuantia||0)+(draft.iva||0)+(draft.otros||0))}</span>
-                </div>
-              </div>}
-              <div style={{ display:"flex", gap:10 }}>
-                <button onClick={confirmInvoice} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"9px 20px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600 }}>✓ Confirmar y guardar</button>
-                <button onClick={advanceReview} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"9px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>{reviewQueue.length > 1 ? "Saltar" : "Cancelar"}</button>
-              </div>
-            </div>}
           </div>
+
+          {/* ── Review table ── */}
+          {reviewQueue.length > 0 && <div style={{ marginTop:28 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:"#f59e0b" }}>⚠ {reviewQueue.length} documentos pendientes de revisión</div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={()=>{
+                  const valid = reviewQueue.filter(inv => inv.fecha && inv.proveedor && inv.categoria && inv.cuantia && inv.activo);
+                  if (valid.length === 0) { showFlash("Rellena al menos activo y categoría en cada fila.","err"); return; }
+                  const toSave = valid.map(inv => { const { _file, ...rest } = inv; return { ...rest, id: crypto.randomUUID() }; });
+                  addInvoices(toSave);
+                  const remaining = reviewQueue.filter(inv => !(inv.fecha && inv.proveedor && inv.categoria && inv.cuantia && inv.activo));
+                  setReviewQueue(remaining);
+                  if (remaining.length === 0) showFlash(`✓ ${toSave.length} documentos guardados.`);
+                  else showFlash(`✓ ${toSave.length} guardados. ${remaining.length} incompletos.`, "warn");
+                }} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"8px 20px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600 }}>✓ Confirmar todos</button>
+                <button onClick={()=>{ setReviewQueue([]); showFlash("Revisión descartada.","warn"); }} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>Descartar todos</button>
+              </div>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead><tr style={{ background:"#0d1f35" }}>
+                  {["Fecha","Proveedor","Concepto","Activo","Categoría","Cuantía","IVA","Ret.","Total","Notas","Doc",""].map(h => <th key={h} style={{ padding:"8px 8px", textAlign:["Cuantía","IVA","Ret.","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {reviewQueue.map((inv,i) => {
+                    const t = (inv.cuantia||0)+(inv.iva||0)+(inv.otros||0);
+                    const missing = !inv.activo || !inv.categoria;
+                    const upd = (field, val) => setReviewQueue(prev => prev.map((r,j) => j===i ? {...r, [field]:val} : r));
+                    return <tr key={i} style={{ background:missing?"#1f0a0a10":i%2===0?"#0a1628":"#080f1a" }}>
+                      <td style={{ padding:"4px 6px" }}><input value={inv.fecha||""} onChange={e=>upd("fecha",e.target.value)} style={{ width:80, background:"#080f1a", border:`1px solid ${inv.fecha?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><input value={inv.proveedor||""} onChange={e=>upd("proveedor",e.target.value)} style={{ width:120, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><input value={inv.concepto||""} onChange={e=>upd("concepto",e.target.value)} style={{ width:140, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><select value={inv.activo||""} onChange={e=>upd("activo",e.target.value)} style={{ background:"#080f1a", border:`1px solid ${inv.activo?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select></td>
+                      <td style={{ padding:"4px 6px" }}><select value={inv.categoria||""} onChange={e=>upd("categoria",e.target.value)} style={{ width:120, background:"#080f1a", border:`1px solid ${inv.categoria?"#1e3a5f":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 4px", fontFamily:"inherit", fontSize:11, outline:"none" }}><option value="">—</option>{CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
+                      <td style={{ padding:"4px 6px" }}><input type="number" value={inv.cuantia||""} onChange={e=>upd("cuantia",parseFloat(e.target.value)||0)} style={{ width:70, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><input type="number" value={inv.iva||""} onChange={e=>upd("iva",parseFloat(e.target.value)||0)} style={{ width:60, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                      <td style={{ padding:"4px 6px" }}><input type="number" value={inv.otros||""} onChange={e=>upd("otros",parseFloat(e.target.value)||null)} style={{ width:60, background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
+                      <td style={{ padding:"4px 6px", textAlign:"right", color:"#f87171", fontWeight:600, fontSize:12 }}>{fmt(t)}</td>
+                      <td style={{ padding:"4px 6px", color:"#fbbf24", fontSize:11, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={inv.notas||""}>{inv.notas||"—"}</td>
+                      <td style={{ padding:"4px 6px", textAlign:"center" }}>
+                        {inv._file ? <button onClick={()=>{setDraft(inv)}} title="Ver PDF" style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📄</button> : "—"}
+                      </td>
+                      <td style={{ padding:"4px 6px", textAlign:"center" }}>
+                        <button onClick={()=>setReviewQueue(prev=>prev.filter((_,j)=>j!==i))} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>
+                      </td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {/* PDF viewer for selected review item */}
+            {draft && draft._file && <div style={{ marginTop:16, maxWidth:600 }}><PdfViewer file={draft._file} /></div>}
+          </div>}
         </div>}
 
         {/* ══ BASE DE DATOS ══ */}
@@ -981,14 +1047,36 @@ export default function App() {
               {[["fecha-desc","Reciente ↓"],["fecha-asc","Antigua ↑"]].map(([k,l]) => <button key={k} onClick={()=>setBdSort(k)} style={{ background:bdSort===k?"#1e3a5f":"transparent", border:`1px solid ${bdSort===k?"#3b82f6":"#1e3a5f"}`, color:bdSort===k?"#93c5fd":"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{l}</button>)}
             </div>
             <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-              <span style={{ fontSize:11, color:"#475569", marginRight:4 }}>Activo:</span>
-              {["Todos",...ACTIVOS].map(a => <button key={a} onClick={()=>setBdFilterActivo(a)} style={{ background:bdFilterActivo===a?"#1e3a5f":"transparent", border:`1px solid ${bdFilterActivo===a?"#3b82f6":"#1e3a5f"}`, color:bdFilterActivo===a?"#93c5fd":"#64748b", padding:"4px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{a}</button>)}
+              <span style={{ fontSize:11, color:"#475569" }}>Activo:</span>
+              <select value={bdFilterActivo} onChange={e=>setBdFilterActivo(e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none" }}>
+                <option value="Todos">Todos</option>
+                {ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}
+              </select>
             </div>
             <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-              <span style={{ fontSize:11, color:"#475569", marginRight:4 }}>Tipo:</span>
-              {["Todos","Factura","Escritura","G. Financiero"].map(t => <button key={t} onClick={()=>setBdFilterTipo(t)} style={{ background:bdFilterTipo===t?"#1e3a5f":"transparent", border:`1px solid ${bdFilterTipo===t?"#3b82f6":"#1e3a5f"}`, color:bdFilterTipo===t?"#93c5fd":"#64748b", padding:"4px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{t}</button>)}
+              <span style={{ fontSize:11, color:"#475569" }}>Tipo:</span>
+              <select value={bdFilterTipo} onChange={e=>setBdFilterTipo(e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none" }}>
+                <option value="Todos">Todos</option>
+                <option value="Factura">Factura</option>
+                <option value="Escritura">Escritura</option>
+                <option value="G. Financiero">G. Financiero</option>
+              </select>
             </div>
-            {(bdFilterActivo!=="Todos"||bdFilterTipo!=="Todos"||bdSort!=="fecha-desc") && <button onClick={()=>{setBdSort("fecha-desc");setBdFilterActivo("Todos");setBdFilterTipo("Todos")}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
+            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+              <span style={{ fontSize:11, color:"#475569" }}>Categoría:</span>
+              <select value={bdFilterCat||"Todos"} onChange={e=>setBdFilterCat(e.target.value==="Todos"?null:e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none", maxWidth:180 }}>
+                <option value="Todos">Todos</option>
+                {[...CATEGORIAS, "G. Financiero – Póliza", "G. Financiero – Préstamo"].map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+              <span style={{ fontSize:11, color:"#475569" }}>Proveedor:</span>
+              <select value={bdFilterProv||"Todos"} onChange={e=>setBdFilterProv(e.target.value==="Todos"?null:e.target.value)} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"4px 8px", fontFamily:"inherit", fontSize:11, outline:"none", maxWidth:180 }}>
+                <option value="Todos">Todos</option>
+                {[...new Set(allMovements.map(m=>m.proveedor).filter(Boolean))].sort().map(p=><option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            {(bdFilterActivo!=="Todos"||bdFilterTipo!=="Todos"||bdSort!=="fecha-desc"||bdFilterCat||bdFilterProv) && <button onClick={()=>{setBdSort("fecha-desc");setBdFilterActivo("Todos");setBdFilterTipo("Todos");setBdFilterCat(null);setBdFilterProv(null)}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar</button>}
           </div>
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
@@ -1057,55 +1145,20 @@ export default function App() {
 
         {/* ══ FACTURAS IVA/IRPF ══ */}
         {tab==="facturas" && (() => {
-          // Build quarterly data: { "2025": { "4T25": {base, iva, ret, count}, "3T25": ... }, ... }
-          const qData = {};
-          allFacturasIVA.forEach(inv => {
-            const q = getQuarter(inv.fecha);
-            const yr = "20" + q.slice(-2);
-            if (!qData[yr]) qData[yr] = {};
-            if (!qData[yr][q]) qData[yr][q] = { base:0, iva:0, ret:0, count:0 };
-            qData[yr][q].base += (inv.cuantia||0);
-            qData[yr][q].iva += (inv.iva||0);
-            qData[yr][q].ret += (inv.otros||0);
-            qData[yr][q].count++;
-          });
-          const years = Object.keys(qData).sort().reverse();
+          // Build year options from quarters
+          const yearSet = new Set(quarters.map(q => "20" + q.slice(-2)));
+          const yearOptions = [...yearSet].sort().reverse();
 
           return <div>
-            {/* Quarter filter */}
+            {/* Filter buttons: years + quarters, most recent first */}
             <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap" }}>
-              {["Todos", ...quarters.slice().reverse()].map(q => <button key={q} onClick={()=>setFilterQ(q)} style={{ background:filterQ===q?"#1e3a5f":"transparent", border:`1px solid ${filterQ===q?"#3b82f6":"#1e3a5f"}`, color:filterQ===q?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:filterQ===q?600:400 }}>{q}</button>)}
+              <button onClick={()=>setFilterQ("Todos")} style={{ background:filterQ==="Todos"?"#1e3a5f":"transparent", border:`1px solid ${filterQ==="Todos"?"#3b82f6":"#1e3a5f"}`, color:filterQ==="Todos"?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:filterQ==="Todos"?600:400 }}>Todos</button>
+              {yearOptions.map(yr => <button key={yr} onClick={()=>setFilterQ(yr)} style={{ background:filterQ===yr?"#1e3a5f":"transparent", border:`1px solid ${filterQ===yr?"#3b82f6":"#1e3a5f"}`, color:filterQ===yr?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:filterQ===yr?600:400 }}>{yr}</button>)}
+              {quarters.slice().reverse().map(q => <button key={q} onClick={()=>setFilterQ(q)} style={{ background:filterQ===q?"#1e3a5f":"transparent", border:`1px solid ${filterQ===q?"#3b82f6":"#1e3a5f"}`, color:filterQ===q?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:filterQ===q?600:400 }}>{q}</button>)}
             </div>
 
-            {/* Quarterly summary cards by year */}
-            {years.map(yr => {
-              const qs = Object.keys(qData[yr]).sort().reverse(); // 4T, 3T, 2T, 1T
-              const yrBase = qs.reduce((s,q) => s + qData[yr][q].base, 0);
-              const yrIVA = qs.reduce((s,q) => s + qData[yr][q].iva, 0);
-              const yrRet = qs.reduce((s,q) => s + qData[yr][q].ret, 0);
-              return <div key={yr} style={{ marginBottom:24 }}>
-                <div style={{ fontSize:13, fontWeight:700, color:"#94a3b8", marginBottom:10 }}>{yr}</div>
-                <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:12 }}>
-                  {/* Annual total */}
-                  <div style={{ background:"#0d1f35", border:"1px solid #3b82f6", borderRadius:10, padding:"12px 16px", minWidth:160 }}>
-                    <div style={{ fontSize:10, color:"#3b82f6", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>Anual {yr}</div>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>Base</span><span style={{ color:"#60a5fa" }}>{fmt(yrBase)}</span></div>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>IVA</span><span style={{ color:"#fbbf24" }}>{fmt(yrIVA)}</span></div>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569" }}><span>Ret.</span><span style={{ color:"#f59e0b" }}>{fmt(yrRet)}</span></div>
-                  </div>
-                  {/* Each quarter */}
-                  {qs.map(q => <div key={q} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"12px 16px", minWidth:140, cursor:"pointer", outline:filterQ===q?"2px solid #3b82f6":"none" }} onClick={()=>setFilterQ(filterQ===q?"Todos":q)}>
-                    <div style={{ fontSize:10, color:"#64748b", letterSpacing:1, textTransform:"uppercase", marginBottom:6 }}>{q} <span style={{ color:"#334155" }}>({qData[yr][q].count})</span></div>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>Base</span><span style={{ color:"#e2e8f0" }}>{fmt(qData[yr][q].base)}</span></div>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569", marginBottom:2 }}><span>IVA</span><span style={{ color:"#fbbf24" }}>{fmt(qData[yr][q].iva)}</span></div>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#475569" }}><span>Ret.</span><span style={{ color:"#f59e0b" }}>{fmt(qData[yr][q].ret)}</span></div>
-                  </div>)}
-                </div>
-              </div>;
-            })}
-
-            {/* Totals row */}
-            <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:20, paddingTop:12, borderTop:"1px solid #1e3a5f" }}>
+            {/* Summary cards */}
+            <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:20 }}>
               {[["Base imponible",totalBaseIVA,"#60a5fa"],["IVA soportado",totalIVASop,"#fbbf24"],["Retenciones",totalRet,"#f59e0b"],["Neto",totalBaseIVA+totalIVASop+totalRet,"#f87171"]].map(([l,v,c]) =>
                 <div key={l} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"12px 18px", flex:"1 1 160px", minWidth:140 }}>
                   <div style={{ fontSize:10, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:4 }}>{l}{filterQ!=="Todos"?` (${filterQ})`:""}</div>
@@ -1113,7 +1166,11 @@ export default function App() {
                 </div>)}
             </div>
 
-            <div style={{ fontSize:12, color:"#475569", marginBottom:12 }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+              <div style={{ fontSize:12, color:"#475569" }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
+              <button onClick={exportReporting} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>📥 Export reporting</button>
+            </div>
+
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                 <thead><tr style={{ background:"#0d1f35" }}>
