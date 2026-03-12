@@ -432,10 +432,15 @@ function Field({ label, value, onChange, required, options, type="text" }) {
 
 // ─── Excel-style column filter dropdown ───────────────────────────────────────
 function FilterDropdown({ column, values, selected, onApply, isOpen, onToggle, onSort }) {
-  const allSelected = !selected;
-  const selectedSet = selected || new Set(values);
+  // Local staged state — only applied on OK
+  const [localSel, setLocalSel] = useState(null); // null = all selected
   const [search, setSearch] = useState("");
   const ref = useRef();
+
+  // Sync local state when dropdown opens
+  useEffect(() => {
+    if (isOpen) { setLocalSel(selected ? new Set(selected) : null); setSearch(""); }
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!isOpen) return;
@@ -446,18 +451,35 @@ function FilterDropdown({ column, values, selected, onApply, isOpen, onToggle, o
 
   if (!isOpen) return null;
 
+  const localAll = !localSel;
+  const localSet = localSel || new Set(values);
   const filtered = search ? values.filter(v => (v||"").toLowerCase().includes(search.toLowerCase())) : values;
+  const hasChanges = (() => {
+    if (!selected && !localSel) return false;
+    if (!selected && localSel) return true;
+    if (selected && !localSel) return true;
+    if (selected.size !== localSel.size) return true;
+    for (const v of selected) { if (!localSel.has(v)) return true; }
+    return false;
+  })();
 
   const toggleAll = () => {
-    if (allSelected) onApply(new Set());
-    else onApply(null);
+    if (localAll) setLocalSel(new Set()); // deselect all
+    else setLocalSel(null); // select all
   };
   const toggleOne = (v) => {
-    const next = new Set(selectedSet);
+    const next = new Set(localSet);
     if (next.has(v)) next.delete(v);
     else next.add(v);
-    if (next.size === values.length) onApply(null);
-    else onApply(next);
+    if (next.size === values.length) setLocalSel(null);
+    else setLocalSel(next);
+  };
+
+  const handleOK = () => {
+    // If nothing is selected, treat same as "select all" to avoid blank table
+    if (localSel && localSel.size === 0) { onApply(null); }
+    else { onApply(localSel); }
+    onToggle(null);
   };
 
   return (
@@ -492,20 +514,24 @@ function FilterDropdown({ column, values, selected, onApply, isOpen, onToggle, o
       {/* Checkboxes */}
       <div style={{ maxHeight:220, overflowY:"auto", padding:"4px 0" }}>
         <div style={{ padding:"4px 12px", display:"flex", alignItems:"center", gap:6, cursor:"pointer" }} onClick={toggleAll}>
-          <input type="checkbox" checked={allSelected} readOnly style={{ accentColor:"#3b82f6" }} />
-          <span style={{ fontSize:12, color:"#94a3b8", fontWeight:600 }}>(Select All)</span>
+          <input type="checkbox" checked={localAll} readOnly style={{ accentColor:"#3b82f6" }} />
+          <span style={{ fontSize:12, color:"#94a3b8", fontWeight:600 }}>(Seleccionar todo)</span>
         </div>
         {filtered.sort().map(v => (
           <div key={v} style={{ padding:"3px 12px", display:"flex", alignItems:"center", gap:6, cursor:"pointer" }} onClick={()=>toggleOne(v)}>
-            <input type="checkbox" checked={selectedSet.has(v)} readOnly style={{ accentColor:"#3b82f6" }} />
+            <input type="checkbox" checked={localSet.has(v)} readOnly style={{ accentColor:"#3b82f6" }} />
             <span style={{ fontSize:11, color:"#cbd5e1", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:200 }}>{v || "(vacío)"}</span>
           </div>
         ))}
       </div>
-      {/* OK / Cancel */}
-      <div style={{ borderTop:"1px solid #1e3a5f", padding:"8px 10px", display:"flex", justifyContent:"flex-end", gap:6 }}>
-        <button onClick={()=>onToggle(null)} style={{ background:"#1d4ed8", border:"none", color:"#fff", padding:"4px 14px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>OK</button>
-        <button onClick={()=>{onApply(null);onToggle(null)}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 14px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>Cancel</button>
+      {/* Status + OK / Cancel */}
+      {localSel && localSel.size === 0 && <div style={{ padding:"4px 12px", fontSize:11, color:"#f59e0b" }}>⚠ Selecciona al menos un valor</div>}
+      <div style={{ borderTop:"1px solid #1e3a5f", padding:"8px 10px", display:"flex", justifyContent:"space-between", alignItems:"center", gap:6 }}>
+        <span style={{ fontSize:10, color:"#475569" }}>{localAll ? `${values.length} de ${values.length}` : `${localSel.size} de ${values.length}`}</span>
+        <div style={{ display:"flex", gap:6 }}>
+          <button onClick={handleOK} style={{ background: hasChanges?"#1d4ed8":"#1e3a5f", border:"none", color:"#fff", padding:"4px 14px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", fontWeight: hasChanges?700:400 }}>OK</button>
+          <button onClick={()=>onToggle(null)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 14px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>Cancelar</button>
+        </div>
       </div>
     </div>
   );
