@@ -431,9 +431,10 @@ function Field({ label, value, onChange, required, options, type="text" }) {
 }
 
 // ─── Excel-style column filter dropdown ───────────────────────────────────────
-function FilterDropdown({ column, values, selected, onApply, isOpen, onToggle }) {
-  const allSelected = !selected; // null means all selected
+function FilterDropdown({ column, values, selected, onApply, isOpen, onToggle, onSort }) {
+  const allSelected = !selected;
   const selectedSet = selected || new Set(values);
+  const [search, setSearch] = useState("");
   const ref = useRef();
 
   useEffect(() => {
@@ -445,32 +446,67 @@ function FilterDropdown({ column, values, selected, onApply, isOpen, onToggle })
 
   if (!isOpen) return null;
 
+  const filtered = search ? values.filter(v => (v||"").toLowerCase().includes(search.toLowerCase())) : values;
+
   const toggleAll = () => {
-    if (allSelected) onApply(new Set()); // deselect all
-    else onApply(null); // select all
+    if (allSelected) onApply(new Set());
+    else onApply(null);
   };
   const toggleOne = (v) => {
     const next = new Set(selectedSet);
     if (next.has(v)) next.delete(v);
     else next.add(v);
-    // If all are selected, set to null (no filter)
     if (next.size === values.length) onApply(null);
     else onApply(next);
   };
 
   return (
-    <div ref={ref} style={{ position:"absolute", top:"100%", left:0, zIndex:100, background:"#0d1f35", border:"1px solid #1e3a5f", borderRadius:8, padding:8, minWidth:180, maxHeight:300, overflowY:"auto", boxShadow:"0 8px 24px rgba(0,0,0,0.6)" }}
+    <div ref={ref} style={{ position:"absolute", top:"100%", left:0, zIndex:100, background:"#0d1f35", border:"1px solid #1e3a5f", borderRadius:8, minWidth:220, boxShadow:"0 8px 24px rgba(0,0,0,0.6)" }}
       onClick={e=>e.stopPropagation()}>
-      <div style={{ padding:"4px 8px", marginBottom:4, display:"flex", alignItems:"center", gap:6, cursor:"pointer", borderBottom:"1px solid #1e3a5f", paddingBottom:8 }} onClick={toggleAll}>
-        <input type="checkbox" checked={allSelected} readOnly style={{ accentColor:"#3b82f6" }} />
-        <span style={{ fontSize:12, color:"#94a3b8" }}>(Seleccionar todo)</span>
-      </div>
-      {values.sort().map(v => (
-        <div key={v} style={{ padding:"3px 8px", display:"flex", alignItems:"center", gap:6, cursor:"pointer" }} onClick={()=>toggleOne(v)}>
-          <input type="checkbox" checked={selectedSet.has(v)} readOnly style={{ accentColor:"#3b82f6" }} />
-          <span style={{ fontSize:11, color:"#cbd5e1", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:200 }}>{v || "(vacío)"}</span>
+      {/* Sort options */}
+      {onSort && <>
+        <div style={{ padding:"8px 12px", cursor:"pointer", display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#94a3b8" }}
+          onMouseEnter={e=>e.currentTarget.style.background="#1e3a5f"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+          onClick={()=>{onSort("asc");onToggle(null)}}>
+          <span style={{ fontSize:11, color:"#60a5fa" }}>A↓Z</span> Ordenar A → Z
         </div>
-      ))}
+        <div style={{ padding:"8px 12px", cursor:"pointer", display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#94a3b8" }}
+          onMouseEnter={e=>e.currentTarget.style.background="#1e3a5f"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+          onClick={()=>{onSort("desc");onToggle(null)}}>
+          <span style={{ fontSize:11, color:"#60a5fa" }}>Z↓A</span> Ordenar Z → A
+        </div>
+        <div style={{ borderBottom:"1px solid #1e3a5f", margin:"4px 0" }} />
+      </>}
+      {/* Clear filter for this column */}
+      {selected && <div style={{ padding:"6px 12px", cursor:"pointer", fontSize:11, color:"#64748b" }}
+        onMouseEnter={e=>e.currentTarget.style.color="#f87171"} onMouseLeave={e=>e.currentTarget.style.color="#64748b"}
+        onClick={()=>{onApply(null);onToggle(null)}}>
+        ✕ Limpiar filtro de "{column}"
+      </div>}
+      <div style={{ borderBottom:"1px solid #1e3a5f", margin:"4px 0" }} />
+      {/* Search */}
+      <div style={{ padding:"6px 10px" }}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar…"
+          style={{ width:"100%", background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:4, color:"#e2e8f0", padding:"5px 8px", fontFamily:"inherit", fontSize:11, outline:"none", boxSizing:"border-box" }} />
+      </div>
+      {/* Checkboxes */}
+      <div style={{ maxHeight:220, overflowY:"auto", padding:"4px 0" }}>
+        <div style={{ padding:"4px 12px", display:"flex", alignItems:"center", gap:6, cursor:"pointer" }} onClick={toggleAll}>
+          <input type="checkbox" checked={allSelected} readOnly style={{ accentColor:"#3b82f6" }} />
+          <span style={{ fontSize:12, color:"#94a3b8", fontWeight:600 }}>(Select All)</span>
+        </div>
+        {filtered.sort().map(v => (
+          <div key={v} style={{ padding:"3px 12px", display:"flex", alignItems:"center", gap:6, cursor:"pointer" }} onClick={()=>toggleOne(v)}>
+            <input type="checkbox" checked={selectedSet.has(v)} readOnly style={{ accentColor:"#3b82f6" }} />
+            <span style={{ fontSize:11, color:"#cbd5e1", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:200 }}>{v || "(vacío)"}</span>
+          </div>
+        ))}
+      </div>
+      {/* OK / Cancel */}
+      <div style={{ borderTop:"1px solid #1e3a5f", padding:"8px 10px", display:"flex", justifyContent:"flex-end", gap:6 }}>
+        <button onClick={()=>onToggle(null)} style={{ background:"#1d4ed8", border:"none", color:"#fff", padding:"4px 14px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>OK</button>
+        <button onClick={()=>{onApply(null);onToggle(null)}} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 14px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>Cancel</button>
+      </div>
     </div>
   );
 }
@@ -608,9 +644,13 @@ export default function App() {
   // Escrituras from Supabase
   const [escriturasDB, setEscriturasDB] = useState([]);
   // BD sort & filter (Excel-style header filters)
-  const [bdSort, setBdSort]         = useState("fecha-desc");
+  const [bdSortCol, setBdSortCol]   = useState("fecha");
+  const [bdSortDir, setBdSortDir]   = useState("desc");
   const [bdFilters, setBdFilters]   = useState({}); // { colName: Set of selected values or null (all) }
   const [openFilterCol, setOpenFilterCol] = useState(null);
+  // Facturas filter
+  const [facFilterCol, setFacFilterCol] = useState(null);
+  const [facFilters, setFacFilters] = useState({});
 
   useEffect(() => {
     const loadData = async () => {
@@ -835,8 +875,15 @@ export default function App() {
         return selected.has(val);
       });
     });
-    if (bdSort === "fecha-desc") list.sort((a,b) => parseDate(b.fecha) - parseDate(a.fecha));
-    else if (bdSort === "fecha-asc") list.sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
+    if (bdSortCol === "fecha") {
+      list.sort((a,b) => bdSortDir === "desc" ? parseDate(b.fecha) - parseDate(a.fecha) : parseDate(a.fecha) - parseDate(b.fecha));
+    } else {
+      list.sort((a,b) => {
+        const va = (bdSortCol === "periodo" ? getQuarter(a.fecha) : String(a[bdSortCol]||"")).toLowerCase();
+        const vb = (bdSortCol === "periodo" ? getQuarter(b.fecha) : String(b[bdSortCol]||"")).toLowerCase();
+        return bdSortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+      });
+    }
     return list;
   })();
 
@@ -849,8 +896,8 @@ export default function App() {
     categoria: [...new Set(allMovements.map(m => m.categoria).filter(Boolean))],
   };
   const setFilter = (col, val) => setBdFilters(prev => ({ ...prev, [col]: val }));
-  const hasActiveFilters = Object.values(bdFilters).some(v => v !== null && v !== undefined);
-  const clearAllFilters = () => { setBdFilters({}); setBdSort("fecha-desc"); setOpenFilterCol(null); };
+  const hasActiveFilters = Object.values(bdFilters).some(v => v !== null && v !== undefined) || bdSortCol !== "fecha" || bdSortDir !== "desc";
+  const clearAllFilters = () => { setBdFilters({}); setBdSortCol("fecha"); setBdSortDir("desc"); setOpenFilterCol(null); };
 
   // ── Edit helpers ──
   const startEdit = (mov) => {
@@ -890,14 +937,30 @@ export default function App() {
   };
   const hasDoc = (path) => path && path.includes("/"); // valid storage path has a folder
 
-  // Facturas para IVA/IRPF — with quarter filtering
+  // Facturas para IVA/IRPF — with quarter + column filtering
   const allFacturasIVA = invoices.filter(inv => (inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim()));
   const quarters = [...new Set(allFacturasIVA.map(inv => getQuarter(inv.fecha)).filter(Boolean))].sort();
-  // filterQ can be "Todos", "2025" (year), or "4T25" (quarter)
-  const facturasIVA = filterQ === "Todos" ? allFacturasIVA
-    : filterQ.length === 4 && !filterQ.includes("T") // year like "2025"
+  let facturasIVA = filterQ === "Todos" ? [...allFacturasIVA]
+    : filterQ.length === 4 && !filterQ.includes("T")
       ? allFacturasIVA.filter(inv => { const q = getQuarter(inv.fecha); return q && "20"+q.slice(-2) === filterQ; })
       : allFacturasIVA.filter(inv => getQuarter(inv.fecha) === filterQ);
+  // Apply column filters
+  Object.entries(facFilters).forEach(([col, selected]) => {
+    if (!selected) return;
+    if (selected.size === 0) { facturasIVA = []; return; }
+    facturasIVA = facturasIVA.filter(inv => {
+      const val = col === "periodo" ? getQuarter(inv.fecha) : inv[col];
+      return selected.has(val);
+    });
+  });
+  const facUniqueVals = {
+    periodo: [...new Set(allFacturasIVA.map(inv => getQuarter(inv.fecha)).filter(Boolean))],
+    proveedor: [...new Set(allFacturasIVA.map(inv => inv.proveedor).filter(Boolean))],
+    activo: [...new Set(allFacturasIVA.map(inv => inv.activo).filter(Boolean))],
+    categoria: [...new Set(allFacturasIVA.map(inv => inv.categoria).filter(Boolean))],
+  };
+  const setFacFilter = (col, val) => setFacFilters(prev => ({ ...prev, [col]: val }));
+  const hasFacFilters = Object.values(facFilters).some(v => v !== null && v !== undefined);
   const totalBaseIVA = facturasIVA.reduce((s,inv) => s+(inv.cuantia||0), 0);
   const totalIVASop = facturasIVA.reduce((s,inv) => s+(inv.iva||0), 0);
   const totalRet = facturasIVA.reduce((s,inv) => s+(inv.otros||0), 0);
@@ -1053,23 +1116,22 @@ export default function App() {
                   </span>}
             </div>
           </div>
-          {/* Sort controls + clear */}
+          {/* Clear filters */}
           <div style={{ display:"flex", gap:8, marginBottom:14, alignItems:"center" }}>
-            <span style={{ fontSize:11, color:"#475569" }}>Orden:</span>
-            {[["fecha-desc","Reciente ↓"],["fecha-asc","Antigua ↑"]].map(([k,l]) => <button key={k} onClick={()=>setBdSort(k)} style={{ background:bdSort===k?"#1e3a5f":"transparent", border:`1px solid ${bdSort===k?"#3b82f6":"#1e3a5f"}`, color:bdSort===k?"#93c5fd":"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>{l}</button>)}
-            {hasActiveFilters && <button onClick={clearAllFilters} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginLeft:8 }}>✕ Limpiar filtros</button>}
+            {hasActiveFilters && <button onClick={clearAllFilters} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
+            <span style={{ fontSize:11, color:"#334155" }}>{bdMovements.length} de {allMovements.length}</span>
           </div>
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead><tr style={{ background:"#0d1f35" }}>
                 {[
-                  { key:"fecha", label:"Fecha" },
-                  { key:"periodo", label:"Período", filterable:true },
-                  { key:"tipo", label:"Tipo", filterable:true },
-                  { key:"proveedor", label:"Proveedor", filterable:true },
-                  { key:"concepto", label:"Concepto" },
-                  { key:"activo", label:"Activo", filterable:true },
-                  { key:"categoria", label:"Categoría", filterable:true },
+                  { key:"fecha", label:"Fecha", filterable:true, sortable:true },
+                  { key:"periodo", label:"Período", filterable:true, sortable:true },
+                  { key:"tipo", label:"Tipo", filterable:true, sortable:true },
+                  { key:"proveedor", label:"Proveedor", filterable:true, sortable:true },
+                  { key:"concepto", label:"Concepto", sortable:true },
+                  { key:"activo", label:"Activo", filterable:true, sortable:true },
+                  { key:"categoria", label:"Categoría", filterable:true, sortable:true },
                   { key:"cuantia", label:"Cuantía", align:"right" },
                   { key:"iva", label:"IVA", align:"right" },
                   { key:"otros", label:"Ret.", align:"right" },
@@ -1088,6 +1150,7 @@ export default function App() {
                       isOpen={openFilterCol===col.key}
                       onToggle={setOpenFilterCol}
                       onApply={(val)=>setFilter(col.key,val)}
+                      onSort={col.sortable ? (dir) => { setBdSortCol(col.key); setBdSortDir(dir); } : null}
                     />}
                   </th>
                 ))}
@@ -1177,12 +1240,41 @@ export default function App() {
 
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
               <div style={{ fontSize:12, color:"#475569" }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
+              {hasFacFilters && <button onClick={()=>setFacFilters({})} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
             </div>
 
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                 <thead><tr style={{ background:"#0d1f35" }}>
-                  {["Nº","Fecha","Período","Proveedor","Concepto","Activo","Categoría","Base","IVA","Retención","Total","Doc"].map(h => <th key={h} style={{ padding:"9px 10px", textAlign:["Base","IVA","Retención","Total"].includes(h)?"right":h==="Doc"?"center":"left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                  {[
+                    { key:"numero", label:"Nº" },
+                    { key:"fecha", label:"Fecha" },
+                    { key:"periodo", label:"Período", filterable:true },
+                    { key:"proveedor", label:"Proveedor", filterable:true },
+                    { key:"concepto", label:"Concepto" },
+                    { key:"activo", label:"Activo", filterable:true },
+                    { key:"categoria", label:"Categoría", filterable:true },
+                    { key:"cuantia", label:"Base", align:"right" },
+                    { key:"iva", label:"IVA", align:"right" },
+                    { key:"otros", label:"Retención", align:"right" },
+                    { key:"total", label:"Total", align:"right" },
+                    { key:"doc", label:"Doc", align:"center" },
+                  ].map(col => (
+                    <th key={col.key} style={{ padding:"9px 10px", textAlign:col.align||"left", color:facFilters[col.key]?"#3b82f6":"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap", position:"relative", cursor:col.filterable?"pointer":"default" }}
+                      onClick={()=>{ if(col.filterable) setFacFilterCol(facFilterCol===col.key?null:col.key) }}>
+                      {col.label}
+                      {col.filterable && <span style={{ marginLeft:4, fontSize:8, color:facFilters[col.key]?"#3b82f6":"#334155" }}>▼</span>}
+                      {col.filterable && <FilterDropdown
+                        column={col.key}
+                        values={facUniqueVals[col.key]||[]}
+                        selected={facFilters[col.key]||null}
+                        isOpen={facFilterCol===col.key}
+                        onToggle={setFacFilterCol}
+                        onApply={(val)=>setFacFilter(col.key,val)}
+                        onSort={null}
+                      />}
+                    </th>
+                  ))}
                 </tr></thead>
                 <tbody>
                   {facturasIVA.map((inv,i) => <tr key={inv.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
