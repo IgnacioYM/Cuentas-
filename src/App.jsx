@@ -508,7 +508,7 @@ function DropZone({ label, name, onFile, file }) {
         onClick={()=>ref.current.click()}
         style={{ border:`2px dashed ${drag?"#3b82f6":file?"#22c55e":"#1e3a5f"}`, borderRadius:8, padding:"28px 20px", textAlign:"center", cursor:"pointer", background: drag?"#0d1f35":file?"#052e16":"#0a1628" }}
       >
-        <input ref={ref} type="file" accept=".xlsx,.xls,.csv" onChange={e=>{const f=e.target.files[0];if(f)onFile(f)}} style={{ display:"none" }} />
+        <input ref={ref} type="file" accept=".xlsx,.xls,.csv" onChange={e=>{const f=e.target.files[0];if(f)onFile(f);e.target.value=""}} style={{ display:"none" }} />
         {file
           ? <div><div style={{fontSize:20,marginBottom:6}}>✓</div><div style={{color:"#4ade80",fontSize:13,fontWeight:600}}>{file.name}</div></div>
           : <div><div style={{fontSize:24,marginBottom:8}}>📂</div><div style={{color:"#475569",fontSize:13}}>Arrastra el Excel o haz clic</div></div>}
