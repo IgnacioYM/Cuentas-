@@ -479,9 +479,14 @@ const invoiceKey = inv => {
   const prov    = (inv.proveedor||"").toLowerCase().trim().replace(/\s+/g," ");
   const cuantia = parseFloat(inv.cuantia||0).toFixed(2);
   const iva     = parseFloat(inv.iva||0).toFixed(2);
+  const otros   = parseFloat(inv.otros||0).toFixed(2);
   const num     = (inv.numero||"").trim().toLowerCase();
-  if (num) return `${prov}|${num}`;
-  return `${fecha}|${prov}|${cuantia}|${iva}`;
+  const activo  = (inv.activo||"").trim().toUpperCase();
+  const concepto = (inv.concepto||"").toLowerCase().trim().slice(0,40);
+  // Con número: prov + num + activo (la misma factura puede repartirse entre activos)
+  if (num) return `${prov}|${num}|${activo}`;
+  // Sin número: todos los campos discriminantes
+  return `${fecha}|${prov}|${cuantia}|${iva}|${otros}|${activo}|${concepto}`;
 };
 
 // DD/MM/YYYY → "1T25", "2T25", etc.
@@ -814,6 +819,9 @@ export default function App() {
   // Facturas filter
   const [facFilterCol, setFacFilterCol] = useState(null);
   const [facFilters, setFacFilters] = useState({});
+  // GF Excel-style filter
+  const [gfFilterCol, setGfFilterCol] = useState(null);
+  const [gfFilters, setGfFilters] = useState({});
 
   useEffect(() => {
     const loadData = async () => {
@@ -1473,6 +1481,7 @@ export default function App() {
                     { key:"total", label:"Total", align:"right" },
                     { key:"estado", label:"Estado", align:"center" },
                     { key:"doc", label:"Doc", align:"center" },
+                    { key:"del", label:"", align:"center" },
                   ].map(col => (
                     <th key={col.key} style={{ padding:"9px 10px", textAlign:col.align||"left", color:facFilters[col.key]?"#3b82f6":"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap", position:"relative", cursor:col.filterable?"pointer":"default" }}
                       onClick={()=>{ if(col.filterable) setFacFilterCol(facFilterCol===col.key?null:col.key) }}>
@@ -1508,6 +1517,11 @@ export default function App() {
                     </td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
                       {hasDoc(inv.archivo_origen) ? <button onClick={()=>openDoc(inv.archivo_origen)} style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button> : <span style={{ color:"#1e3a5f" }}>—</span>}
+                    </td>
+                    <td style={{ padding:"8px 6px", textAlign:"center" }}>
+                      {delConfirm===inv.id
+                        ? <span style={{ fontSize:11 }}><button onClick={()=>{ const u=invoices.filter(x=>x.id!==inv.id); invoicesRef.current=u; setInvoices(u); deleteInvoice(inv.id).catch(()=>{}); setDelConfirm(null); showFlash("Eliminada.","warn"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"2px 7px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginRight:4 }}>Sí</button><button onClick={()=>setDelConfirm(null)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"2px 7px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>No</button></span>
+                        : <button onClick={()=>setDelConfirm(inv.id)} style={{ background:"transparent", border:"none", color:"#334155", cursor:"pointer", fontSize:13, padding:"2px 5px" }} title="Eliminar">✕</button>}
                     </td>
                   </tr>)}
                 </tbody>
@@ -1589,15 +1603,64 @@ export default function App() {
           <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
             {cats.map(c => <button key={c} onClick={()=>setFilterCat(c)} style={{ background:filterCat===c?"#1e3a5f":"transparent", border:`1px solid ${filterCat===c?"#3b82f6":"#1e3a5f"}`, color:filterCat===c?"#93c5fd":"#64748b", padding:"5px 12px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{c}</button>)}
           </div>
-          {filtered.length === 0
-            ? <div style={{ textAlign:"center", color:"#334155", padding:"60px 0", fontSize:14 }}>No hay movimientos. Ve a <span style={{ color:"#3b82f6", cursor:"pointer" }} onClick={()=>setTab("importar")}>Importar</span>.</div>
-            : <div style={{ overflowX:"auto" }}>
+          {(() => {
+            // Apply category filter first
+            let gfFiltered = filterCat==="Todas" ? entries : entries.filter(e=>e.cat===filterCat);
+            // Apply Excel-style column filters
+            Object.entries(gfFilters).forEach(([col, selected]) => {
+              if (!selected) return;
+              if (selected.size === 0) { gfFiltered = []; return; }
+              gfFiltered = gfFiltered.filter(e => {
+                const val = col === "account" ? e.account : col === "cat" ? e.cat : col === "sub" ? e.sub : e[col];
+                return selected.has(val);
+              });
+            });
+            const gfUniqueVals = {
+              account: [...new Set(entries.map(e => e.account).filter(Boolean))],
+              cat: [...new Set(entries.map(e => e.cat).filter(Boolean))],
+              sub: [...new Set(entries.map(e => e.sub).filter(Boolean))],
+            };
+            const setGfFilter = (col, val) => setGfFilters(prev => ({ ...prev, [col]: val }));
+            const hasGfFilters = Object.values(gfFilters).some(v => v !== null && v !== undefined);
+
+            return gfFiltered.length === 0
+            ? <div style={{ textAlign:"center", color:"#334155", padding:"60px 0", fontSize:14 }}>
+                {entries.length === 0
+                  ? <>No hay movimientos. Ve a <span style={{ color:"#3b82f6", cursor:"pointer" }} onClick={()=>setTab("importar")}>Importar</span>.</>
+                  : <>Sin resultados para estos filtros. {hasGfFilters && <button onClick={()=>setGfFilters({})} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginLeft:8 }}>✕ Limpiar</button>}</>}
+              </div>
+            : <div>
+                {hasGfFilters && <div style={{ marginBottom:10 }}><button onClick={()=>setGfFilters({})} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button> <span style={{ fontSize:11, color:"#334155", marginLeft:8 }}>{gfFiltered.length} de {entries.length}</span></div>}
+                <div style={{ overflowX:"auto" }}>
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                   <thead><tr style={{ background:"#0d1f35" }}>
-                    {["Fecha","Concepto","Cta.","Categoría","Subcategoría","Importe",""].map(h => <th key={h} style={{ padding:"10px 12px", textAlign:h==="Importe"?"right":"left", color:"#475569", fontWeight:600, fontSize:11, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>)}
+                    {[
+                      { key:"date", label:"Fecha" },
+                      { key:"concept", label:"Concepto" },
+                      { key:"account", label:"Cta.", filterable:true },
+                      { key:"cat", label:"Categoría", filterable:true },
+                      { key:"sub", label:"Subcategoría", filterable:true },
+                      { key:"amount", label:"Importe", align:"right" },
+                      { key:"actions", label:"" },
+                    ].map(col => (
+                      <th key={col.key} style={{ padding:"10px 12px", textAlign:col.align||"left", color:gfFilters[col.key]?"#3b82f6":"#475569", fontWeight:600, fontSize:11, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap", position:"relative", cursor:col.filterable?"pointer":"default" }}
+                        onClick={()=>{ if(col.filterable) setGfFilterCol(gfFilterCol===col.key?null:col.key) }}>
+                        {col.label}
+                        {col.filterable && <span style={{ marginLeft:4, fontSize:8, color:gfFilters[col.key]?"#3b82f6":"#334155" }}>▼</span>}
+                        {col.filterable && <FilterDropdown
+                          column={col.key}
+                          values={gfUniqueVals[col.key]||[]}
+                          selected={gfFilters[col.key]||null}
+                          isOpen={gfFilterCol===col.key}
+                          onToggle={setGfFilterCol}
+                          onApply={(val)=>setGfFilter(col.key,val)}
+                          onSort={null}
+                        />}
+                      </th>
+                    ))}
                   </tr></thead>
                   <tbody>
-                    {filtered.map((e,i) => { const col = CAT_COLORS[e.cat]||{bg:"#111",accent:"#888"}; return <tr key={e.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={ev=>ev.currentTarget.style.background="#0d1f35"} onMouseLeave={ev=>ev.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
+                    {gfFiltered.map((e,i) => { const col = CAT_COLORS[e.cat]||{bg:"#111",accent:"#888"}; return <tr key={e.id} style={{ background:i%2===0?"#0a1628":"#080f1a" }} onMouseEnter={ev=>ev.currentTarget.style.background="#0d1f35"} onMouseLeave={ev=>ev.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"}>
                       <td style={{ padding:"9px 12px", color:"#94a3b8", whiteSpace:"nowrap" }}>{e.date}</td>
                       <td style={{ padding:"9px 12px", color:"#cbd5e1", maxWidth:260 }}>{e.concept}</td>
                       <td style={{ padding:"9px 12px" }}><span style={{ background:"#0f2942", color:"#60a5fa", padding:"2px 8px", borderRadius:4, fontSize:11, fontWeight:700 }}>{e.account}</span></td>
@@ -1611,7 +1674,8 @@ export default function App() {
                     </tr>; })}
                   </tbody>
                 </table>
-              </div>}
+              </div></div>;
+          })()}
           {entries.length > 0 && <div style={{ marginTop:16, padding:14, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, fontSize:12, color:"#475569" }}>Período: <span style={{ color:"#94a3b8" }}>{entries[0]?.date}</span> → <span style={{ color:"#94a3b8" }}>{entries[entries.length-1]?.date}</span> · {entries.length} movimientos</div>}
         </div>;
         })()}
@@ -1800,7 +1864,37 @@ export default function App() {
             setConcRunning(false);
           };
 
-          // Accept suggestion
+          // Accept ALL suggestions in one batch
+          const acceptAllSugerencias = async () => {
+            const allItems = [];
+            const allFacIds = new Set();
+            for (const sug of concSugerencias) {
+              for (const sf of sug.facturas) {
+                allItems.push({
+                  movimiento_id: sug.movimiento.id,
+                  factura_id: sf.factura.id,
+                  importe: sf.importe,
+                  metodo: sug.metodo,
+                  confianza: sug.confianza,
+                });
+                allFacIds.add(sf.factura.id);
+              }
+            }
+            if (allItems.length === 0) return;
+            const result = await upsertConciliaciones(allItems);
+            if (result) {
+              for (const fid of allFacIds) {
+                await updateFacturaEstado(fid, "pagada");
+              }
+              setConciliaciones(prev => [...prev, ...allItems.map((it, i) => ({ ...it, id: result[i]?.id || `temp-${Date.now()}-${i}` }))]);
+              setConcSugerencias([]);
+              showFlash(`✓ ${allItems.length} conciliación(es) guardada(s).`);
+            } else {
+              showFlash("Error al guardar conciliaciones.", "err");
+            }
+          };
+
+          // Accept single suggestion
           const acceptSugerencia = async (sug, idx) => {
             const items = sug.facturas.map(sf => ({
               movimiento_id: sug.movimiento.id,
@@ -1885,8 +1979,8 @@ export default function App() {
             return <span style={{ background: bg, color, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{pct}%</span>;
           };
           const metodoBadge = (m) => {
-            const labels = { auto_exacto: "Exacto", auto_proveedor: "Proveedor", auto_agrupado: "Agrupado", manual: "Manual" };
-            const colors = { auto_exacto: "#4ade80", auto_proveedor: "#60a5fa", auto_agrupado: "#c084fc", manual: "#94a3b8" };
+            const labels = { auto_exacto: "Exacto", auto_proveedor: "Proveedor", auto_numero: "Nº factura", auto_agrupado: "Agrupado", auto_importe: "Importe", manual: "Manual" };
+            const colors = { auto_exacto: "#4ade80", auto_proveedor: "#60a5fa", auto_numero: "#38bdf8", auto_agrupado: "#c084fc", auto_importe: "#fbbf24", manual: "#94a3b8" };
             return <span style={{ background: "#0d1f35", color: colors[m] || "#64748b", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, border: `1px solid ${colors[m] || "#334155"}33` }}>{labels[m] || m}</span>;
           };
 
@@ -1935,12 +2029,7 @@ export default function App() {
             {concSugerencias.length > 0 && <div style={{ marginBottom:32 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
                 <div style={{ fontSize:14, fontWeight:700, color:"#f1f5f9" }}>Sugerencias de conciliación</div>
-                <button onClick={async () => {
-                  for (let i = concSugerencias.length - 1; i >= 0; i--) {
-                    await acceptSugerencia(concSugerencias[i], i);
-                  }
-                  showFlash("Todas las sugerencias aceptadas.");
-                }} style={{ background:"#052e16", border:"1px solid #22c55e44", color:"#4ade80", padding:"6px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>✓ Aceptar todas ({concSugerencias.length})</button>
+                <button onClick={acceptAllSugerencias} style={{ background:"#052e16", border:"1px solid #22c55e44", color:"#4ade80", padding:"6px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>✓ Aceptar todas ({concSugerencias.length})</button>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                 {concSugerencias.map((sug, idx) => {
