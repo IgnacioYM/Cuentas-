@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, fetchMovimientosBancarios, upsertMovimientosBancarios, deleteAllMovimientosBancarios, uploadFile, getSignedUrl } from "./supabaseClient";
+import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, fetchMovimientosBancarios, upsertMovimientosBancarios, deleteAllMovimientosBancarios, uploadFile, getSignedUrl, fetchConciliaciones, upsertConciliaciones, deleteConciliacion, updateFacturaEstado } from "./supabaseClient";
 import DashboardTab from "./DashboardTab";
 import { ESCRITURAS } from "./escrituras";
+import { generarSugerencias, resumenConciliacion } from "./reconciliacion";
 
 // ─── Clasificación Gastos Financieros ─────────────────────────────────────────
 const RULES = [
@@ -798,6 +799,13 @@ export default function App() {
   const [confirmBorrarBanco, setConfirmBorrarBanco] = useState(false);
   const [bankFilterCol, setBankFilterCol] = useState(null);
   const [bankFilters, setBankFilters] = useState({});
+  // Conciliacion state
+  const [conciliaciones, setConciliaciones] = useState([]);
+  const [concSugerencias, setConcSugerencias] = useState([]);
+  const [concRunning, setConcRunning] = useState(false);
+  const [concManualMov, setConcManualMov] = useState(null);
+  const [concManualFacs, setConcManualFacs] = useState(new Set());
+  const [concManualSearch, setConcManualSearch] = useState("");
   // BD sort & filter (Excel-style header filters)
   const [bdSortCol, setBdSortCol]   = useState("fecha");
   const [bdSortDir, setBdSortDir]   = useState("desc");
@@ -826,6 +834,9 @@ export default function App() {
         // Load bank movements
         const sbBank = await fetchMovimientosBancarios();
         if (sbBank && sbBank.length > 0) setBankMovements(sbBank);
+        // Load conciliaciones
+        const sbConc = await fetchConciliaciones();
+        if (sbConc && sbConc.length > 0) setConciliaciones(sbConc);
       } catch {
         try {
           const e = localStorage.getItem("gf-entries-arena-nexus"); if (e) setEntries(JSON.parse(e));
@@ -1093,6 +1104,9 @@ export default function App() {
   const hasActiveFilters = Object.values(bdFilters).some(v => v !== null && v !== undefined) || bdSortCol !== "fecha" || bdSortDir !== "desc";
   const clearAllFilters = () => { setBdFilters({}); setBdSortCol("fecha"); setBdSortDir("desc"); setOpenFilterCol(null); };
 
+  // Precomputed set for estado badges across tabs
+  const bdConcFacIds = new Set(conciliaciones.map(c => c.factura_id));
+
   // ── Edit helpers ──
   const startEdit = (mov) => {
     setEditingId(mov.id);
@@ -1174,7 +1188,7 @@ export default function App() {
 
   if (!loaded) return <div style={{ background:"#080f1a", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", color:"#3b82f6", fontFamily:"monospace" }}>Cargando…</div>;
 
-  const TABS = [["importar","⬆ Importar"],["bd","🗄 Base de datos"],["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["banco","💳 Banco"],["gf","🏦 G. Financieros"],["resumen","📈 Resumen"]];
+  const TABS = [["importar","⬆ Importar"],["bd","🗄 Base de datos"],["facturas","🧾 Facturas"],["dashboard","📊 Dashboard"],["banco","💳 Banco"],["conciliacion","🔗 Conciliación"],["gf","🏦 G. Financieros"],["resumen","📈 Resumen"]];
 
   return (
     <div style={{ background:"#080f1a", minHeight:"100vh", fontFamily:"'DM Mono','Fira Code',monospace", color:"#e2e8f0" }}>
@@ -1203,7 +1217,7 @@ export default function App() {
             {apiKey ? "✓ API configurada" : "⚙ Configurar API"}
           </button>
           <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:11, color:"#64748b", marginBottom:2 }}>{allMovements.length} movimientos · {invoices.length} facturas</div>
+            <div style={{ fontSize:11, color:"#64748b", marginBottom:2 }}>{allMovements.length} movimientos · {invoices.length} facturas · {conciliaciones.length} conciliaciones</div>
           </div>
         </div>
       </div>
@@ -1330,6 +1344,7 @@ export default function App() {
                   { key:"iva", label:"IVA", align:"right" },
                   { key:"otros", label:"Ret.", align:"right" },
                   { key:"total", label:"Total", align:"right" },
+                  { key:"estado", label:"Estado", align:"center" },
                   { key:"doc", label:"Doc", align:"center" },
                   { key:"actions", label:"" },
                 ].map(col => (
@@ -1371,6 +1386,7 @@ export default function App() {
                       <td style={{ padding:"4px 6px" }}><input type="number" value={ed.iva||""} onChange={e=>setEditDraft(d=>({...d,iva:e.target.value}))} style={{ width:60, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
                       <td style={{ padding:"4px 6px" }}><input type="number" value={ed.otros||""} onChange={e=>setEditDraft(d=>({...d,otros:e.target.value}))} style={{ width:60, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
                       <td style={{ padding:"4px 6px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt(etotal)}</td>
+                      <td style={{ padding:"4px 6px", textAlign:"center" }}><span style={{ color:"#334155", fontSize:10 }}>—</span></td>
                       <td style={{ padding:"4px 6px" }}></td>
                       <td style={{ padding:"4px 6px", whiteSpace:"nowrap" }}>
                         <button onClick={saveEdit} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"2px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginRight:4 }}>✓</button>
@@ -1392,6 +1408,9 @@ export default function App() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#64748b" }}>{(mov.iva||0)!==0?fmt(mov.iva):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:mov.otros?"#f59e0b":"#334155" }}>{mov.otros?fmt(mov.otros):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt(t)}</td>
+                    <td style={{ padding:"8px 6px", textAlign:"center" }}>
+                      {mov.tipo==="Factura" ? (() => { const paid = bdConcFacIds.has(mov.id); return <span style={{ background:paid?"#052e16":"#1c1917", color:paid?"#4ade80":"#f59e0b", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{paid?"Pagada":"Pdte"}</span>; })() : <span style={{ color:"#1e3a5f", fontSize:10 }}>—</span>}
+                    </td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
                       {hasDoc(mov.archivo_origen)
                         ? <button onClick={(e)=>{e.stopPropagation();openDoc(mov.archivo_origen)}} title="Ver documento" style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button>
@@ -1452,6 +1471,7 @@ export default function App() {
                     { key:"iva", label:"IVA", align:"right" },
                     { key:"otros", label:"Retención", align:"right" },
                     { key:"total", label:"Total", align:"right" },
+                    { key:"estado", label:"Estado", align:"center" },
                     { key:"doc", label:"Doc", align:"center" },
                   ].map(col => (
                     <th key={col.key} style={{ padding:"9px 10px", textAlign:col.align||"left", color:facFilters[col.key]?"#3b82f6":"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap", position:"relative", cursor:col.filterable?"pointer":"default" }}
@@ -1483,6 +1503,9 @@ export default function App() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#fbbf24", fontWeight:600 }}>{fmt(inv.iva||0)}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:inv.otros?"#f59e0b":"#334155" }}>{inv.otros?fmt(inv.otros):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt((inv.cuantia||0)+(inv.iva||0)+(inv.otros||0))}</td>
+                    <td style={{ padding:"8px 6px", textAlign:"center" }}>
+                      {(() => { const paid = bdConcFacIds.has(inv.id); return <span style={{ background: paid?"#052e16":"#1c1917", color: paid?"#4ade80":"#f59e0b", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{paid?"Pagada":"Pendiente"}</span>; })()}
+                    </td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
                       {hasDoc(inv.archivo_origen) ? <button onClick={()=>openDoc(inv.archivo_origen)} style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📎</button> : <span style={{ color:"#1e3a5f" }}>—</span>}
                     </td>
@@ -1740,6 +1763,397 @@ export default function App() {
                 </div>
               </>
             }
+          </div>;
+        })()}
+
+        {/* ══ CONCILIACIÓN ══ */}
+        {tab==="conciliacion" && (() => {
+          const concFacIds = new Set(conciliaciones.map(c => c.factura_id));
+          const concMovIds = new Set(conciliaciones.map(c => c.movimiento_id));
+          const stats = resumenConciliacion(bankMovements, invoices, conciliaciones);
+
+          const getEstadoFactura = (facId) => {
+            if (concFacIds.has(facId)) return "pagada";
+            return "pendiente";
+          };
+
+          // Conciliaciones agrupadas por movimiento
+          const concByMov = {};
+          conciliaciones.forEach(c => {
+            if (!concByMov[c.movimiento_id]) concByMov[c.movimiento_id] = [];
+            concByMov[c.movimiento_id].push(c);
+          });
+
+          // Auto-conciliar handler
+          const runAutoConciliar = async () => {
+            setConcRunning(true);
+            try {
+              const facsSinConc = invoices.filter(f => !concFacIds.has(f.id));
+              const movsSinConc = bankMovements.filter(m => !concMovIds.has(m.id));
+              const sugs = generarSugerencias(movsSinConc, facsSinConc);
+              setConcSugerencias(sugs);
+              if (sugs.length === 0) showFlash("No se encontraron nuevas coincidencias.", "warn");
+              else showFlash(`${sugs.length} coincidencia(s) encontrada(s).`);
+            } catch (err) {
+              showFlash("Error en auto-conciliación: " + err.message, "err");
+            }
+            setConcRunning(false);
+          };
+
+          // Accept suggestion
+          const acceptSugerencia = async (sug, idx) => {
+            const items = sug.facturas.map(sf => ({
+              movimiento_id: sug.movimiento.id,
+              factura_id: sf.factura.id,
+              importe: sf.importe,
+              metodo: sug.metodo,
+              confianza: sug.confianza,
+            }));
+            const result = await upsertConciliaciones(items);
+            if (result) {
+              // Update factura estado
+              for (const sf of sug.facturas) {
+                await updateFacturaEstado(sf.factura.id, "pagada");
+              }
+              setConciliaciones(prev => [...prev, ...items.map((it, i) => ({ ...it, id: result[i]?.id || `temp-${Date.now()}-${i}` }))]);
+              setConcSugerencias(prev => prev.filter((_, i) => i !== idx));
+              showFlash("Conciliación aceptada.");
+            } else {
+              showFlash("Error al guardar conciliación.", "err");
+            }
+          };
+
+          // Reject suggestion
+          const rejectSugerencia = (idx) => {
+            setConcSugerencias(prev => prev.filter((_, i) => i !== idx));
+          };
+
+          // Delete existing conciliacion
+          const removeConciliacion = async (concId, facId) => {
+            const ok = await deleteConciliacion(concId);
+            if (ok) {
+              setConciliaciones(prev => prev.filter(c => c.id !== concId));
+              // Check if factura still has other conciliaciones
+              const remaining = conciliaciones.filter(c => c.factura_id === facId && c.id !== concId);
+              if (remaining.length === 0) {
+                await updateFacturaEstado(facId, "pendiente");
+              }
+              showFlash("Conciliación eliminada.");
+            }
+          };
+
+          // Manual conciliation
+          const submitManual = async () => {
+            if (!concManualMov || concManualFacs.size === 0) return;
+            const mov = bankMovements.find(m => m.id === concManualMov);
+            if (!mov) return;
+            const items = [...concManualFacs].map(fid => {
+              const fac = invoices.find(f => f.id === fid);
+              const total = fac ? Math.abs((fac.cuantia||0) + (fac.iva||0) + (fac.otros||0)) : 0;
+              return {
+                movimiento_id: mov.id,
+                factura_id: fid,
+                importe: total,
+                metodo: "manual",
+                confianza: 1,
+              };
+            });
+            const result = await upsertConciliaciones(items);
+            if (result) {
+              for (const fid of concManualFacs) {
+                await updateFacturaEstado(fid, "pagada");
+              }
+              setConciliaciones(prev => [...prev, ...items.map((it, i) => ({ ...it, id: result[i]?.id || `temp-${Date.now()}-${i}` }))]);
+              setConcManualMov(null);
+              setConcManualFacs(new Set());
+              setConcManualSearch("");
+              showFlash("Conciliación manual guardada.");
+            } else {
+              showFlash("Error al guardar.", "err");
+            }
+          };
+
+          // Helper: find factura/mov by id
+          const facById = (id) => invoices.find(f => f.id === id);
+          const movById = (id) => bankMovements.find(m => m.id === id);
+
+          // Badge helper
+          const confianzaBadge = (conf) => {
+            const pct = Math.round(conf * 100);
+            const color = conf >= 0.9 ? "#4ade80" : conf >= 0.7 ? "#fbbf24" : "#fb923c";
+            const bg = conf >= 0.9 ? "#052e16" : conf >= 0.7 ? "#422006" : "#431407";
+            return <span style={{ background: bg, color, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{pct}%</span>;
+          };
+          const metodoBadge = (m) => {
+            const labels = { auto_exacto: "Exacto", auto_proveedor: "Proveedor", auto_agrupado: "Agrupado", manual: "Manual" };
+            const colors = { auto_exacto: "#4ade80", auto_proveedor: "#60a5fa", auto_agrupado: "#c084fc", manual: "#94a3b8" };
+            return <span style={{ background: "#0d1f35", color: colors[m] || "#64748b", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, border: `1px solid ${colors[m] || "#334155"}33` }}>{labels[m] || m}</span>;
+          };
+
+          // Movimientos pendientes (pagos sin conciliar) for manual mode
+          const movsPendientes = bankMovements
+            .filter(m => m.importe < 0 && ["pago_factura","tributos","devolucion"].includes(m.tipo) && !concMovIds.has(m.id))
+            .sort((a, b) => parseDate(b.fecha) - parseDate(a.fecha));
+
+          // Facturas pendientes for manual mode
+          let facsPendientes = invoices.filter(f => !concFacIds.has(f.id));
+          if (concManualSearch) {
+            const q = concManualSearch.toLowerCase();
+            facsPendientes = facsPendientes.filter(f =>
+              (f.proveedor||"").toLowerCase().includes(q) ||
+              (f.concepto||"").toLowerCase().includes(q) ||
+              (f.numero||"").toLowerCase().includes(q)
+            );
+          }
+
+          return <div>
+            {/* ── Summary cards ── */}
+            <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:24 }}>
+              {[
+                ["Facturas conciliadas", `${stats.facConciliadas} / ${stats.totalFacturas}`, stats.facConciliadas === stats.totalFacturas ? "#4ade80" : "#60a5fa"],
+                ["Facturas pendientes", stats.facPendientes, stats.facPendientes === 0 ? "#4ade80" : "#f87171"],
+                ["Mov. conciliados", `${stats.movConciliados} / ${stats.movimientosPago}`, "#60a5fa"],
+                ["Importe conciliado", fmt(stats.importeConciliado), "#4ade80"],
+                ["Importe pendiente", fmt(stats.importePendiente), "#f87171"],
+              ].map(([label, value, color]) =>
+                <div key={label} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"14px 18px", flex:"1 1 160px", minWidth:150 }}>
+                  <div style={{ fontSize:10, color:"#475569", letterSpacing:1, textTransform:"uppercase", marginBottom:4 }}>{label}</div>
+                  <div style={{ fontSize:18, fontWeight:700, color }}>{value}</div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Action buttons ── */}
+            <div style={{ display:"flex", gap:12, marginBottom:24, alignItems:"center" }}>
+              <button onClick={runAutoConciliar} disabled={concRunning} style={{ background:"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:concRunning?"wait":"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600, opacity:concRunning?0.6:1 }}>
+                {concRunning ? "⏳ Procesando…" : "🔄 Auto-conciliar"}
+              </button>
+              {concSugerencias.length > 0 && <span style={{ fontSize:12, color:"#fbbf24" }}>{concSugerencias.length} sugerencia(s) pendientes</span>}
+            </div>
+
+            {/* ── Sugerencias de conciliación ── */}
+            {concSugerencias.length > 0 && <div style={{ marginBottom:32 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:"#f1f5f9" }}>Sugerencias de conciliación</div>
+                <button onClick={async () => {
+                  for (let i = concSugerencias.length - 1; i >= 0; i--) {
+                    await acceptSugerencia(concSugerencias[i], i);
+                  }
+                  showFlash("Todas las sugerencias aceptadas.");
+                }} style={{ background:"#052e16", border:"1px solid #22c55e44", color:"#4ade80", padding:"6px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>✓ Aceptar todas ({concSugerencias.length})</button>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {concSugerencias.map((sug, idx) => {
+                  const mov = sug.movimiento;
+                  return <div key={`sug-${idx}`} style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"16px 20px" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:12 }}>
+                      {/* Left: movimiento */}
+                      <div style={{ flex:"1 1 300px" }}>
+                        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:6 }}>
+                          {metodoBadge(sug.metodo)}
+                          {confianzaBadge(sug.confianza)}
+                        </div>
+                        <div style={{ fontSize:12, color:"#94a3b8", marginBottom:2 }}>
+                          <span style={{ color:"#475569" }}>Mov:</span> {mov.fecha} · <span style={{ color:"#f87171", fontWeight:600 }}>{fmt(mov.importe)}</span>
+                        </div>
+                        <div style={{ fontSize:11, color:"#64748b", maxWidth:400, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{mov.concepto}</div>
+                      </div>
+                      {/* Center: arrow */}
+                      <div style={{ color:"#334155", fontSize:20, alignSelf:"center", padding:"0 8px" }}>↔</div>
+                      {/* Right: factura(s) */}
+                      <div style={{ flex:"1 1 300px" }}>
+                        {sug.facturas.map((sf, fi) => (
+                          <div key={fi} style={{ marginBottom: fi < sug.facturas.length - 1 ? 6 : 0 }}>
+                            <div style={{ fontSize:12, color:"#cbd5e1" }}>{sf.factura.proveedor}</div>
+                            <div style={{ fontSize:11, color:"#64748b" }}>
+                              {sf.factura.fecha} · {sf.factura.numero || "s/n"} · <span style={{ color:"#f87171" }}>{fmt(sf.importe)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Actions */}
+                      <div style={{ display:"flex", gap:8, alignSelf:"center" }}>
+                        <button onClick={() => acceptSugerencia(sug, idx)} style={{ background:"#052e16", border:"1px solid #22c55e44", color:"#4ade80", padding:"6px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>✓ Aceptar</button>
+                        <button onClick={() => rejectSugerencia(idx)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"6px 12px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
+                      </div>
+                    </div>
+                  </div>;
+                })}
+              </div>
+            </div>}
+
+            {/* ── Manual conciliation ── */}
+            <div style={{ marginBottom:32 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:"#f1f5f9", marginBottom:12 }}>Conciliación manual</div>
+              <div style={{ display:"flex", gap:20, flexWrap:"wrap" }}>
+                {/* Select movimiento */}
+                <div style={{ flex:"1 1 380px", minWidth:300 }}>
+                  <div style={{ fontSize:11, color:"#475569", marginBottom:6, letterSpacing:1, textTransform:"uppercase" }}>1. Seleccionar movimiento</div>
+                  <div style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, maxHeight:280, overflowY:"auto" }}>
+                    {movsPendientes.length === 0
+                      ? <div style={{ padding:20, textAlign:"center", color:"#334155", fontSize:12 }}>Todos los movimientos de pago están conciliados</div>
+                      : movsPendientes.map(m => (
+                        <div key={m.id} onClick={() => setConcManualMov(concManualMov === m.id ? null : m.id)}
+                          style={{ padding:"10px 14px", borderBottom:"1px solid #0d1f35", cursor:"pointer", background: concManualMov === m.id ? "#0d2847" : "transparent" }}
+                          onMouseEnter={e => { if (concManualMov !== m.id) e.currentTarget.style.background="#0d1f35"; }}
+                          onMouseLeave={e => { if (concManualMov !== m.id) e.currentTarget.style.background="transparent"; }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                            <div>
+                              <div style={{ fontSize:12, color:concManualMov===m.id?"#93c5fd":"#94a3b8" }}>{m.fecha} · {m.cuenta}</div>
+                              <div style={{ fontSize:11, color:"#64748b", maxWidth:280, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.concepto}</div>
+                            </div>
+                            <div style={{ fontSize:13, fontWeight:700, color:"#f87171", whiteSpace:"nowrap" }}>{fmt(m.importe)}</div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+
+                {/* Select factura(s) */}
+                <div style={{ flex:"1 1 380px", minWidth:300 }}>
+                  <div style={{ fontSize:11, color:"#475569", marginBottom:6, letterSpacing:1, textTransform:"uppercase" }}>2. Seleccionar factura(s)</div>
+                  <input type="text" placeholder="Buscar por proveedor, concepto, nº…" value={concManualSearch} onChange={e => setConcManualSearch(e.target.value)}
+                    style={{ width:"100%", background:"#080f1a", border:"1px solid #1e3a5f", borderRadius:6, color:"#e2e8f0", padding:"8px 12px", fontFamily:"inherit", fontSize:12, outline:"none", boxSizing:"border-box", marginBottom:8 }} />
+                  <div style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, maxHeight:240, overflowY:"auto" }}>
+                    {facsPendientes.length === 0
+                      ? <div style={{ padding:20, textAlign:"center", color:"#334155", fontSize:12 }}>Sin facturas pendientes{concManualSearch ? " para esta búsqueda" : ""}</div>
+                      : facsPendientes.map(f => {
+                        const total = Math.abs((f.cuantia||0) + (f.iva||0) + (f.otros||0));
+                        const sel = concManualFacs.has(f.id);
+                        return <div key={f.id} onClick={() => {
+                            setConcManualFacs(prev => {
+                              const next = new Set(prev);
+                              if (next.has(f.id)) next.delete(f.id); else next.add(f.id);
+                              return next;
+                            });
+                          }}
+                          style={{ padding:"10px 14px", borderBottom:"1px solid #0d1f35", cursor:"pointer", background: sel ? "#0d2847" : "transparent" }}
+                          onMouseEnter={e => { if (!sel) e.currentTarget.style.background="#0d1f35"; }}
+                          onMouseLeave={e => { if (!sel) e.currentTarget.style.background="transparent"; }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                            <div>
+                              <div style={{ fontSize:12, color:sel?"#93c5fd":"#94a3b8" }}>{f.proveedor}</div>
+                              <div style={{ fontSize:11, color:"#64748b" }}>{f.fecha} · {f.numero || "s/n"} · {f.concepto?.slice(0,40)}</div>
+                            </div>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <span style={{ fontSize:13, fontWeight:700, color:"#f87171", whiteSpace:"nowrap" }}>{fmt(total)}</span>
+                              <span style={{ width:16, height:16, borderRadius:4, border:`1px solid ${sel?"#3b82f6":"#334155"}`, background:sel?"#1d4ed8":"transparent", display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:10, color:"#fff" }}>{sel?"✓":""}</span>
+                            </div>
+                          </div>
+                        </div>;
+                      })}
+                  </div>
+                  {/* Manual summary + submit */}
+                  {concManualMov && concManualFacs.size > 0 && (() => {
+                    const mov = movById(concManualMov);
+                    const sumFacs = [...concManualFacs].reduce((s, fid) => {
+                      const f = facById(fid);
+                      return s + (f ? Math.abs((f.cuantia||0)+(f.iva||0)+(f.otros||0)) : 0);
+                    }, 0);
+                    const diff = Math.abs(mov?.importe || 0) - sumFacs;
+                    return <div style={{ marginTop:10, padding:"12px 14px", background:"#0d1f35", borderRadius:8, border:"1px solid #1e3a5f" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
+                        <span style={{ color:"#94a3b8" }}>Movimiento:</span>
+                        <span style={{ color:"#f87171", fontWeight:600 }}>{fmt(Math.abs(mov?.importe||0))}</span>
+                      </div>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
+                        <span style={{ color:"#94a3b8" }}>Σ Facturas ({concManualFacs.size}):</span>
+                        <span style={{ color:"#60a5fa", fontWeight:600 }}>{fmt(sumFacs)}</span>
+                      </div>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, borderTop:"1px solid #1e3a5f", paddingTop:4 }}>
+                        <span style={{ color:"#94a3b8" }}>Diferencia:</span>
+                        <span style={{ color: Math.abs(diff) < 0.03 ? "#4ade80" : "#fbbf24", fontWeight:600 }}>{fmt(diff)}</span>
+                      </div>
+                      <button onClick={submitManual} style={{ marginTop:10, width:"100%", background:"#1d4ed8", border:"none", color:"#fff", padding:"8px 0", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>Vincular</button>
+                    </div>;
+                  })()}
+                </div>
+              </div>
+            </div>
+
+            {/* ── Conciliaciones existentes ── */}
+            <div>
+              <div style={{ fontSize:14, fontWeight:700, color:"#f1f5f9", marginBottom:12 }}>Conciliaciones registradas ({conciliaciones.length})</div>
+              {conciliaciones.length === 0
+                ? <div style={{ textAlign:"center", padding:"40px 0", color:"#334155", fontSize:13 }}>Aún no hay conciliaciones. Usa Auto-conciliar o la conciliación manual.</div>
+                : <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                    <thead><tr style={{ background:"#0d1f35" }}>
+                      {["Fecha mov.", "Concepto mov.", "Importe mov.", "Proveedor fac.", "Nº factura", "Importe fac.", "Método", "Confianza", ""].map((h, i) =>
+                        <th key={i} style={{ padding:"9px 10px", textAlign: i===2||i===5 ? "right" : "left", color:"#475569", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e3a5f", whiteSpace:"nowrap" }}>{h}</th>
+                      )}
+                    </tr></thead>
+                    <tbody>
+                      {conciliaciones.map((c, ci) => {
+                        const mov = movById(c.movimiento_id);
+                        const fac = facById(c.factura_id);
+                        return <tr key={c.id || ci} style={{ background: ci%2===0 ? "#0a1628" : "#080f1a" }}
+                          onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=ci%2===0?"#0a1628":"#080f1a"}>
+                          <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{mov?.fecha || "—"}</td>
+                          <td style={{ padding:"8px 10px", color:"#64748b", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{mov?.concepto || "—"}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{mov ? fmt(mov.importe) : "—"}</td>
+                          <td style={{ padding:"8px 10px", color:"#cbd5e1" }}>{fac?.proveedor || "—"}</td>
+                          <td style={{ padding:"8px 10px", color:"#475569" }}>{fac?.numero || "—"}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171" }}>{fmt(c.importe)}</td>
+                          <td style={{ padding:"8px 10px" }}>{metodoBadge(c.metodo)}</td>
+                          <td style={{ padding:"8px 10px" }}>{confianzaBadge(c.confianza)}</td>
+                          <td style={{ padding:"8px 6px", textAlign:"center" }}>
+                            <button onClick={() => removeConciliacion(c.id, c.factura_id)} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:13, padding:"2px 5px" }} title="Eliminar conciliación">🗑</button>
+                          </td>
+                        </tr>;
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              }
+            </div>
+
+            {/* ── Anomalías: facturas sin pago + pagos sin factura ── */}
+            <div style={{ display:"flex", gap:20, flexWrap:"wrap", marginTop:32 }}>
+              {/* Facturas sin pago */}
+              <div style={{ flex:"1 1 420px", minWidth:300 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:"#f59e0b", marginBottom:10 }}>⚠ Facturas sin pago ({stats.facPendientes})</div>
+                {stats.facPendientes === 0
+                  ? <div style={{ background:"#052e16", border:"1px solid #22c55e44", borderRadius:8, padding:"16px 20px", color:"#4ade80", fontSize:12 }}>Todas las facturas están conciliadas.</div>
+                  : <div style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, maxHeight:320, overflowY:"auto" }}>
+                    {invoices.filter(f => !concFacIds.has(f.id)).map(f => {
+                      const total = Math.abs((f.cuantia||0) + (f.iva||0) + (f.otros||0));
+                      return <div key={f.id} style={{ padding:"10px 14px", borderBottom:"1px solid #0d1f35", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <div>
+                          <div style={{ fontSize:12, color:"#cbd5e1" }}>{f.proveedor}</div>
+                          <div style={{ fontSize:11, color:"#64748b" }}>{f.fecha} · {f.numero || "s/n"} · {f.activo || "—"}</div>
+                        </div>
+                        <div style={{ fontSize:13, fontWeight:700, color:"#f87171", whiteSpace:"nowrap" }}>{fmt(total)}</div>
+                      </div>;
+                    })}
+                  </div>
+                }
+              </div>
+
+              {/* Pagos sin factura */}
+              {(() => {
+                const movsPagosSinConc = bankMovements
+                  .filter(m => m.importe < 0 && ["pago_factura","tributos","devolucion"].includes(m.tipo) && !concMovIds.has(m.id))
+                  .sort((a, b) => parseDate(b.fecha) - parseDate(a.fecha));
+                return <div style={{ flex:"1 1 420px", minWidth:300 }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:"#60a5fa", marginBottom:10 }}>🔍 Pagos sin factura ({movsPagosSinConc.length})</div>
+                  {movsPagosSinConc.length === 0
+                    ? <div style={{ background:"#052e16", border:"1px solid #22c55e44", borderRadius:8, padding:"16px 20px", color:"#4ade80", fontSize:12 }}>Todos los pagos tienen factura asociada.</div>
+                    : <div style={{ background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:8, maxHeight:320, overflowY:"auto" }}>
+                      {movsPagosSinConc.map(m => (
+                        <div key={m.id} style={{ padding:"10px 14px", borderBottom:"1px solid #0d1f35", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                          <div>
+                            <div style={{ fontSize:12, color:"#94a3b8" }}>{m.fecha} · {m.cuenta}</div>
+                            <div style={{ fontSize:11, color:"#64748b", maxWidth:300, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.concepto}</div>
+                          </div>
+                          <div style={{ fontSize:13, fontWeight:700, color:"#f87171", whiteSpace:"nowrap" }}>{fmt(m.importe)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  }
+                </div>;
+              })()}
+            </div>
           </div>;
         })()}
 
