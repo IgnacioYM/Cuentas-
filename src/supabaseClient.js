@@ -199,15 +199,18 @@ export async function fetchConciliaciones() {
 }
 
 export async function upsertConciliaciones(items) {
-  const rows = items.map(c => ({
-    id: c.id || undefined,
-    movimiento_id: c.movimiento_id,
-    factura_id: c.factura_id,
-    importe: c.importe,
-    metodo: c.metodo || "manual",
-    confianza: c.confianza || 1,
-    notas: c.notas || null,
-  }));
+  const rows = items.map(c => {
+    const row = {
+      movimiento_id: c.movimiento_id,
+      factura_id: c.factura_id,
+      importe: c.importe,
+      metodo: c.metodo || "manual",
+      confianza: c.confianza || 1,
+      notas: c.notas || null,
+    };
+    if (c.id) row.id = c.id;
+    return row;
+  });
   const { data, error } = await supabase
     .from("conciliaciones")
     .upsert(rows, { onConflict: "movimiento_id,factura_id" })
