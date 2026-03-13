@@ -1002,17 +1002,17 @@ export default function App() {
         }
       }
       let msgs = [];
-      // Save bank movements
+      // Save bank movements — always upsert, Supabase handles duplicates
       if (allBank.length > 0) {
-        const existingIds = new Set(bankMovements.map(m => m.id));
-        const freshBank = allBank.filter(m => !existingIds.has(m.id));
-        if (freshBank.length > 0) {
-          const merged = [...bankMovements, ...freshBank];
-          setBankMovements(merged);
-          upsertMovimientosBancarios(freshBank).catch(() => {});
-          msgs.push(`${freshBank.length} movimientos bancarios`);
+        const ok = await upsertMovimientosBancarios(allBank);
+        if (ok) {
+          // Fetch fresh from Supabase to get true state
+          const fresh = await fetchMovimientosBancarios();
+          if (fresh) setBankMovements(fresh);
+          else setBankMovements(allBank); // fallback
+          msgs.push(`${allBank.length} movimientos bancarios`);
         } else {
-          msgs.push("Movimientos bancarios ya registrados");
+          msgs.push("Error guardando movimientos bancarios");
         }
       }
       // Save G. Financieros
@@ -1679,7 +1679,7 @@ export default function App() {
                       ? <button onClick={()=>setConfirmBorrarBanco(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar todo</button>
                       : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
                           <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro?</span>
-                          <button onClick={()=>{ setBankMovements([]); deleteAllMovimientosBancarios().catch(()=>{}); setConfirmBorrarBanco(false); showFlash("Movimientos bancarios eliminados.","err"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
+                          <button onClick={async ()=>{ await deleteAllMovimientosBancarios(); setBankMovements([]); setConfirmBorrarBanco(false); showFlash("Movimientos bancarios eliminados.","err"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
                           <button onClick={()=>setConfirmBorrarBanco(false)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
                         </span>}
                   </div>
