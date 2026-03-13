@@ -969,71 +969,50 @@ export default function App() {
   });
 
   const handleImport = async () => {
-    console.log("=== IMPORT START ===", { ccFile: ccFile?.name, cpFile: cpFile?.name });
     if (!ccFile && !cpFile) { showFlash("Selecciona al menos un archivo.","err"); return; }
     setImporting(true);
     try {
       let allBank = [], allGF = [];
       for (const [file, account] of [[ccFile,"CC"],[cpFile,"CP"]]) {
-        if (!file) { console.log(`[${account}] No file`); continue; }
-        console.log(`[${account}] Reading: ${file.name} (${file.size} bytes)`);
+        if (!file) continue;
         const data = await readFile(file);
-        console.log(`[${account}] Data type: ${typeof data}, length: ${typeof data === "string" ? data.length : data.byteLength}`);
-        // Detect: 4 columns = full bank extract, 3 = G. Financieros only
         let is4Col = false;
         if (typeof data === "string") {
-          const firstLine = data.split(/\r?\n/)[0] || "";
-          const cols = firstLine.split(";").length;
-          is4Col = cols >= 4;
-          console.log(`[${account}] CSV header: "${firstLine}" → ${cols} cols → is4Col=${is4Col}`);
+          is4Col = (data.split(/\r?\n/)[0] || "").split(";").length >= 4;
         } else {
           try {
             const wb = XLSX.read(data, { type: "array" });
             const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false });
             is4Col = rows.length > 0 && (rows[0] || []).length >= 4;
-            console.log(`[${account}] XLSX rows: ${rows.length}, cols: ${(rows[0]||[]).length} → is4Col=${is4Col}`);
-          } catch(e) { console.error(`[${account}] XLSX parse error:`, e); }
+          } catch {}
         }
         if (is4Col) {
           const bankMov = typeof data === "string" ? parseBankCSV(data, account) : parseBankXLSX(data, account);
-          console.log(`[${account}] Parsed ${bankMov.length} bank movements`);
-          if (bankMov.length > 0) console.log(`[${account}] First:`, bankMov[0]);
           allBank.push(...bankMov);
-          // Also extract G. Financieros from same data
           bankMov.filter(m => m.tipo === "gasto_financiero").forEach(m => {
             const cls = classify(m.concepto);
             if (cls) allGF.push({ id: `${account}-${m.fecha}-${m.concepto}-${m.importe}`, date: m.fecha, concept: m.concepto, account, amount: m.importe, cat: cls.cat, sub: cls.sub });
           });
         } else {
           const gf = typeof data === "string" ? parseCSV(data, account) : parseXLSX(data, account);
-          console.log(`[${account}] Parsed ${gf.length} GF entries (3-col mode)`);
           allGF.push(...gf);
         }
       }
-      console.log(`=== TOTALS: ${allBank.length} bank, ${allGF.length} GF ===`);
       let msgs = [];
-      // Save bank movements — always upsert, Supabase handles duplicates
       if (allBank.length > 0) {
-        console.log("Upserting bank movements to Supabase...");
         const ok = await upsertMovimientosBancarios(allBank);
-        console.log("Upsert result:", ok);
         if (ok) {
           const fresh = await fetchMovimientosBancarios();
-          console.log("Fetched fresh from Supabase:", fresh?.length);
           if (fresh) setBankMovements(fresh);
           else setBankMovements(allBank);
           msgs.push(`${allBank.length} movimientos bancarios`);
         } else {
           msgs.push("Error guardando movimientos bancarios");
         }
-      } else {
-        console.log("allBank is EMPTY — no bank movements to save");
       }
-      // Save G. Financieros
       if (allGF.length > 0) {
         const ids = new Set(entries.map(e => e.id));
         const freshGF = allGF.filter(e => !ids.has(e.id));
-        console.log(`GF: ${allGF.length} total, ${freshGF.length} new`);
         if (freshGF.length > 0) {
           setEntries(prev => [...prev, ...freshGF].sort((a,b) => parseDate(a.date) - parseDate(b.date)));
           msgs.push(`${freshGF.length} G. Financieros`);
@@ -1042,7 +1021,7 @@ export default function App() {
       if (msgs.length === 0) showFlash("No se encontraron movimientos nuevos.", "warn");
       else showFlash(`✓ ${msgs.join(" + ")} importados.`);
       setCcFile(null); setCpFile(null);
-    } catch(e) { console.error("IMPORT ERROR:", e); showFlash(`Error: ${e.message}`, "err"); }
+    } catch(e) { console.error("Import error:", e); showFlash(`Error: ${e.message}`, "err"); }
     setImporting(false);
   };
 
