@@ -179,6 +179,61 @@ export async function updateEscritura(esc) {
   return data.length > 0 ? data[0] : null;
 }
 
+// ─── Conciliaciones ───────────────────────────────────────────────────────────
+
+export async function fetchConciliaciones() {
+  const { data, error } = await supabase
+    .from("conciliaciones")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) { console.error("Supabase conciliaciones fetch error:", error); return null; }
+  return data.map(row => ({
+    id: row.id,
+    movimiento_id: row.movimiento_id,
+    factura_id: row.factura_id,
+    importe: parseFloat(row.importe) || 0,
+    metodo: row.metodo || "manual",
+    confianza: parseFloat(row.confianza) || 1,
+    notas: row.notas || "",
+  }));
+}
+
+export async function upsertConciliaciones(items) {
+  const rows = items.map(c => ({
+    id: c.id || undefined,
+    movimiento_id: c.movimiento_id,
+    factura_id: c.factura_id,
+    importe: c.importe,
+    metodo: c.metodo || "manual",
+    confianza: c.confianza || 1,
+    notas: c.notas || null,
+  }));
+  const { data, error } = await supabase
+    .from("conciliaciones")
+    .upsert(rows, { onConflict: "movimiento_id,factura_id" })
+    .select();
+  if (error) { console.error("Supabase conciliaciones upsert error:", error); return null; }
+  return data;
+}
+
+export async function deleteConciliacion(id) {
+  const { error } = await supabase
+    .from("conciliaciones")
+    .delete()
+    .eq("id", id);
+  if (error) { console.error("Supabase conciliacion delete error:", error); return false; }
+  return true;
+}
+
+export async function updateFacturaEstado(facturaId, estado) {
+  const { error } = await supabase
+    .from("facturas")
+    .update({ estado })
+    .eq("id", facturaId);
+  if (error) { console.error("Supabase factura estado update error:", error); return false; }
+  return true;
+}
+
 // ─── Movimientos Bancarios ────────────────────────────────────────────────────
 
 export async function fetchMovimientosBancarios() {
