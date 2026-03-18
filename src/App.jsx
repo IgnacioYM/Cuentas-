@@ -951,7 +951,26 @@ export default function App() {
     for (let i=0; i<fileData.length; i+=BATCH) {
       const batch = fileData.slice(i, i+BATCH);
       const br = await Promise.allSettled(batch.map(fd => callAPI(fd.base64, fd.name)));
-      br.forEach((r, j) => results.push({ result: r.status==="fulfilled" ? {status:"fulfilled",value:r.value} : {status:"rejected",reason:r.reason?.message}, fd: batch[j] }));
+      for (let j = 0; j < br.length; j++) {
+        const r = br[j];
+        if (r.status === "fulfilled") {
+          results.push({ result: { status: "fulfilled", value: r.value }, fd: batch[j] });
+        } else {
+          // Capture full error message
+          const errMsg = r.reason?.message || (r.reason ? String(r.reason) : "Error desconocido");
+          console.error(`Error procesando ${batch[j].name}:`, r.reason);
+          // Retry once individually after a pause
+          try {
+            await new Promise(res => setTimeout(res, 3000));
+            const retryResult = await callAPI(batch[j].base64, batch[j].name);
+            results.push({ result: { status: "fulfilled", value: retryResult }, fd: batch[j] });
+            console.log(`Retry OK: ${batch[j].name}`);
+          } catch (retryErr) {
+            const retryMsg = retryErr?.message || String(retryErr);
+            results.push({ result: { status: "rejected", reason: `${errMsg} (retry: ${retryMsg})` }, fd: batch[j] });
+          }
+        }
+      }
       setProgress({ current: Math.min(i+BATCH, fileData.length), total: fileData.length });
       if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 3000));
     }
