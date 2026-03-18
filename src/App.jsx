@@ -346,6 +346,14 @@ PEDRO FERNÁNDEZ / PEDRO FERNÁNDEZ CASTAÑO:
 - Sin IVA, sin retención. cuantia = importe indemnización, iva = 0, otros = null
 - IMPORTANTE: puede ser un acuerdo firmado, no factura estándar. Procesarlo igual.
 
+═══ DOCUMENTOS QUE NO SON FACTURAS — DESCARTAR ═══
+Si el documento es una DECLARACIÓN FISCAL (Modelo 111, 303, 200, 202, 347, 349, 390, etc.):
+- Estos son presentaciones de impuestos ante la Agencia Tributaria
+- NO son facturas aunque aparezca un "presentador" como Alzai
+- El importe del Modelo 111 (retenciones IRPF) ya está contabilizado en las facturas individuales
+- El Modelo 303 (IVA) es una declaración de IVA, no una factura
+- Responde: {"descartado":true,"motivo":"Declaración fiscal Modelo [nº] — no es factura","modelo":"111","periodo":"1T2025","importe":61.84}
+
 ═══ EXTRACCIÓN DE IMPORTES ═══
 - "cuantia" = Base Imponible + Base no Sujeta + suplidos. TODO antes de IVA y retención.
   Suma cada línea con PRECISIÓN. Verifica: cuantia + iva + otros = Total Factura.
@@ -375,7 +383,8 @@ PEDRO FERNÁNDEZ / PEDRO FERNÁNDEZ CASTAÑO:
 - En escrituras: incluir datos clave (notaría, protocolo, ref catastral, superficie).
 
 Responde SOLO JSON válido sin texto adicional:
-{"numero":"número exacto o vacío","fecha":"DD/MM/YYYY","proveedor":"nombre tal como aparece","concepto":"descripción breve","activo":"código o vacío si duda","categoria":"categoría exacta","cuantia":número,"iva":número,"otros":número_negativo_o_null,"notas":"solo si duda real, si no vacío"}`;
+- Si es factura/documento contable: {"numero":"número exacto o vacío","fecha":"DD/MM/YYYY","proveedor":"nombre tal como aparece","concepto":"descripción breve","activo":"código o vacío si duda","categoria":"categoría exacta","cuantia":número,"iva":número,"otros":número_negativo_o_null,"notas":"solo si duda real, si no vacío"}
+- Si es declaración fiscal u otro documento no contabilizable: {"descartado":true,"motivo":"explicación breve","modelo":"nº modelo si aplica"}`;
 
 // ─── Validación post-IA ───────────────────────────────────────────────────────
 const validateInvoice = (inv, filename) => {
@@ -467,6 +476,14 @@ const validateInvoice = (inv, filename) => {
     if (!v.notas || !v.notas.includes("IVA")) {
       v.notas = (v.notas ? v.notas + ". " : "") + "Revisar: IVA podría estar incluido en cuantía";
     }
+  }
+
+  // 16. Detectar declaraciones fiscales que la IA no descartó (safety net)
+  if (concepto.includes("modelo 111") || concepto.includes("modelo 303") || concepto.includes("modelo 200") ||
+      concepto.includes("modelo 202") || concepto.includes("modelo 347") || concepto.includes("modelo 390") ||
+      (file.includes("mod_111") || file.includes("mod_303") || file.includes("mod_200"))) {
+    v._descartado = true;
+    v._motivo = `Declaración fiscal detectada (${concepto.slice(0,50)}) — no es factura`;
   }
 
   return v;
@@ -789,6 +806,7 @@ export default function App() {
   const [splitMode, setSplitMode]   = useState(false);
   const [splits, setSplits]         = useState([{activo:"",pct:50},{activo:"",pct:50}]);
   const [previewFile, setPreviewFile] = useState(null);
+  const [importLog, setImportLog]     = useState([]); // persistent log of errors + descartados
   const totalPct = splits.reduce((a,s)=>a+(s.pct||0), 0);
   const splitValid = splits.every(s=>s.activo) && Math.abs(totalPct-100)<0.01;
   const invoicesRef = useRef([]);
@@ -908,7 +926,14 @@ export default function App() {
         if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message||`HTTP ${res.status}`); }
         const data = await res.json();
         const text = data.content.map(c=>c.text||"").join("");
-        return validateInvoice(JSON.parse(text.replace(/```json|```/g,"").trim()), filename);
+        const parsed = JSON.parse(text.replace(/```json|```/g,"").trim());
+        // If AI flagged as descartado, return it directly
+        if (parsed.descartado) return { _descartado: true, _motivo: parsed.motivo || "Documento descartado por IA", _filename: filename };
+        // Otherwise validate as invoice
+        const validated = validateInvoice(parsed, filename);
+        // If validateInvoice flagged it
+        if (validated._descartado) return { _descartado: true, _motivo: validated._motivo, _filename: filename };
+        return validated;
       } catch(e) { if (attempt === retries) throw e; await new Promise(r => setTimeout(r, 2000)); }
     }
   };
@@ -930,9 +955,14 @@ export default function App() {
       setProgress({ current: Math.min(i+BATCH, fileData.length), total: fileData.length });
       if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 3000));
     }
-    const autoSaved = [], needsReview = [], errors = [];
+    const autoSaved = [], needsReview = [], errors = [], descartados = [];
     for (const { result, fd } of results) {
       if (result.status === "fulfilled" && result.value) {
+        // Check if descartado
+        if (result.value._descartado) {
+          descartados.push({ filename: fd.name, motivo: result.value._motivo });
+          continue;
+        }
         let archivoPath = "";
         try {
           const datePrefix = new Date().toISOString().slice(0,7);
@@ -944,13 +974,22 @@ export default function App() {
         const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "", archivo_origen: archivoPath };
         // ALL go to review — user always confirms
         needsReview.push({ ...inv, _file: fd.file });
-      } else errors.push(fd.name + ": " + (result.reason||"error"));
+      } else errors.push({ filename: fd.name, error: result.reason||"Error desconocido" });
     }
+    // Build persistent import log
+    const log = [];
+    if (errors.length) errors.forEach(e => log.push({ type: "error", text: `❌ ${e.filename}: ${e.error}` }));
+    if (descartados.length) descartados.forEach(d => log.push({ type: "skip", text: `⏭ ${d.filename}: ${d.motivo}` }));
+    setImportLog(log);
+
     setAnalyzing(false); setProgress({ current:0, total:0 }); setPdfFiles([]);
-    if (errors.length) showFlash(`⚠ ${errors.length} error(es): ${errors[0]}`, "err");
-    if (needsReview.length === 0 && errors.length === 0) showFlash("No se procesó ningún documento.", "warn");
-    else if (needsReview.length > 0) {
-      showFlash(`${needsReview.length} documento${needsReview.length!==1?"s":""} listo${needsReview.length!==1?"s":""} para revisión.`, "warn");
+    const msgs = [];
+    if (needsReview.length) msgs.push(`${needsReview.length} factura(s) para revisión`);
+    if (descartados.length) msgs.push(`${descartados.length} descartado(s)`);
+    if (errors.length) msgs.push(`${errors.length} error(es)`);
+    if (msgs.length === 0) showFlash("No se procesó ningún documento.", "warn");
+    else showFlash(msgs.join(" · "), needsReview.length > 0 ? "ok" : errors.length > 0 ? "err" : "warn");
+    if (needsReview.length > 0) {
       setReviewQueue(needsReview); setReviewIdx(0); setDraft(needsReview[0]);
     }
   };
@@ -1259,6 +1298,17 @@ export default function App() {
               <button onClick={handleImport} disabled={importing} style={{ background:importing?"#1e3a5f":"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:importing?"default":"pointer", fontSize:14, fontFamily:"inherit", fontWeight:600 }}>{importing ? "Procesando…" : "Importar movimientos"}</button>
             </div>
           </div>
+
+          {/* ── Import log (errors + descartados) ── */}
+          {importLog.length > 0 && <div style={{ marginTop:20, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"14px 18px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+              <span style={{ fontSize:12, fontWeight:700, color:"#94a3b8" }}>Log de importación</span>
+              <button onClick={()=>setImportLog([])} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ cerrar</button>
+            </div>
+            {importLog.map((entry, i) => (
+              <div key={i} style={{ fontSize:12, color: entry.type === "error" ? "#f87171" : "#fbbf24", padding:"3px 0" }}>{entry.text}</div>
+            ))}
+          </div>}
 
           {/* ── Review table (no PDF viewer unless click) ── */}
           {reviewQueue.length > 0 && <div style={{ marginTop:28 }}>
