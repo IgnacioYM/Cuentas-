@@ -139,6 +139,15 @@ export async function upsertGastosFinancieros(entries) {
   return true;
 }
 
+export async function deleteAllGastosFinancieros() {
+  const { error } = await supabase
+    .from("gastos_financieros")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+  if (error) { console.error("Supabase GF delete all error:", error); return false; }
+  return true;
+}
+
 // ─── Escrituras ───────────────────────────────────────────────────────────────
 
 export async function fetchEscrituras() {
