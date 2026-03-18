@@ -1303,8 +1303,15 @@ export default function App() {
                         <td style={{ padding:"4px 6px", textAlign:"center" }}>
                           {inv._file ? <button onClick={()=>setPreviewFile(previewFile===inv._file?null:inv._file)} title="Ver PDF" style={{ background:"transparent", border:"none", color:previewFile===inv._file?"#4ade80":"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📄</button> : "—"}
                         </td>
-                        <td style={{ padding:"4px 6px", textAlign:"center" }}>
-                          <button onClick={()=>setReviewQueue(prev=>prev.filter((_,j)=>j!==i))} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>
+                        <td style={{ padding:"4px 6px", textAlign:"center", whiteSpace:"nowrap" }}>
+                          <button onClick={()=>{
+                            if (!inv.fecha || !inv.proveedor || !inv.categoria || !inv.cuantia || !inv.activo) { showFlash("Completa fecha, proveedor, activo, categoría y cuantía.","err"); return; }
+                            const { _file, ...rest } = inv;
+                            addInvoices([{ ...rest, id: crypto.randomUUID() }]);
+                            setReviewQueue(prev => prev.filter((_,j) => j!==i));
+                            showFlash("✓ Factura guardada.");
+                          }} title="Confirmar" style={{ background:"transparent", border:"none", color:"#4ade80", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✓</button>
+                          <button onClick={()=>setReviewQueue(prev=>prev.filter((_,j)=>j!==i))} title="Descartar" style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>
                         </td>
                       </tr>;
                     })}
