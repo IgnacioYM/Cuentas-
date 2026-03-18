@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, fetchMovimientosBancarios, upsertMovimientosBancarios, deleteAllMovimientosBancarios, uploadFile, getSignedUrl, fetchConciliaciones, upsertConciliaciones, deleteConciliacion, deleteAllConciliaciones, updateFacturaEstado } from "./supabaseClient";
+import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, deleteAllGastosFinancieros, fetchEscrituras, fetchMovimientosBancarios, upsertMovimientosBancarios, deleteAllMovimientosBancarios, uploadFile, getSignedUrl, fetchConciliaciones, upsertConciliaciones, deleteConciliacion, deleteAllConciliaciones, updateFacturaEstado } from "./supabaseClient";
 import DashboardTab from "./DashboardTab";
 import { ESCRITURAS } from "./escrituras";
 import { generarSugerencias, resumenConciliacion } from "./reconciliacion";
@@ -802,6 +802,7 @@ export default function App() {
   const [bankFilterCuenta, setBankFilterCuenta] = useState("Todas");
   const [bankFilterTipo, setBankFilterTipo] = useState(null);
   const [confirmBorrarBanco, setConfirmBorrarBanco] = useState(false);
+  const [confirmBorrarGF, setConfirmBorrarGF] = useState(false);
   const [bankFilterCol, setBankFilterCol] = useState(null);
   const [bankFilters, setBankFilters] = useState({});
   // Conciliacion state
@@ -1600,8 +1601,17 @@ export default function App() {
             </div>
           </div>}
 
-          <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
+          <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
             {cats.map(c => <button key={c} onClick={()=>setFilterCat(c)} style={{ background:filterCat===c?"#1e3a5f":"transparent", border:`1px solid ${filterCat===c?"#3b82f6":"#1e3a5f"}`, color:filterCat===c?"#93c5fd":"#64748b", padding:"5px 12px", borderRadius:20, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{c}</button>)}
+            {entries.length > 0 && <div style={{ marginLeft:"auto" }}>
+              {!confirmBorrarGF
+                ? <button onClick={()=>setConfirmBorrarGF(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar G. Financieros</button>
+                : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro? Se borrarán {entries.length} movimientos</span>
+                    <button onClick={async ()=>{ setEntries([]); try { localStorage.removeItem("gf-entries-arena-nexus"); } catch{} await deleteAllGastosFinancieros(); setConfirmBorrarGF(false); showFlash("G. Financieros eliminados.","warn"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
+                    <button onClick={()=>setConfirmBorrarGF(false)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
+                  </span>}
+            </div>}
           </div>
           {(() => {
             // Apply category filter first
