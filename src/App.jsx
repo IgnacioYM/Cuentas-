@@ -1423,7 +1423,7 @@ export default function App() {
                         <td style={{ padding:"4px 6px", textAlign:"right", color:"#f87171", fontWeight:600, fontSize:12 }}>{fmt(t)}</td>
                         <td style={{ padding:"4px 6px", color:"#fbbf24", fontSize:11, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={inv.notas||""}>{inv.notas||"—"}</td>
                         <td style={{ padding:"4px 6px", textAlign:"center" }}>
-                          {inv._file ? <button onClick={()=>setPreviewFile(previewFile===inv._file?null:inv._file)} title="Ver PDF" style={{ background:"transparent", border:"none", color:previewFile===inv._file?"#4ade80":"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📄</button> : "—"}
+                          {inv._file ? <button onClick={()=>{ const url = URL.createObjectURL(inv._file); window.open(url, "_blank"); }} title="Ver PDF" style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:14, padding:"2px 5px" }}>📄</button> : "—"}
                         </td>
                         <td style={{ padding:"4px 6px", textAlign:"center", whiteSpace:"nowrap" }}>
                           <button onClick={()=>{
@@ -1440,8 +1440,6 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-              {/* PDF preview — only when user clicks Doc */}
-              {previewFile && <div style={{ flex:"0 0 400px", minWidth:300 }}><PdfViewer file={previewFile} /></div>}
             </div>
           </div>}
         </div>}
