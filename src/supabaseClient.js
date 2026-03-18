@@ -228,6 +228,15 @@ export async function deleteConciliacion(id) {
   return true;
 }
 
+export async function deleteAllConciliaciones() {
+  const { error } = await supabase
+    .from("conciliaciones")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+  if (error) { console.error("Supabase conciliaciones delete all error:", error); return false; }
+  return true;
+}
+
 export async function updateFacturaEstado(facturaId, estado) {
   const { error } = await supabase
     .from("facturas")
