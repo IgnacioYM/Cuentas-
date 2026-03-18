@@ -809,6 +809,9 @@ export default function App() {
   const [importLog, setImportLog]     = useState([]); // persistent log of descartados
   const [manualQueue, setManualQueue] = useState([]); // failed PDFs pending manual entry
   const [manualDraft, setManualDraft] = useState(null); // current manual entry fields
+  const [manualSplitMode, setManualSplitMode] = useState(false);
+  const [manualSplits, setManualSplits] = useState([{activo:"",pct:50},{activo:"",pct:50}]);
+  const [skippedQueue, setSkippedQueue] = useState([]); // skipped items for later
   const totalPct = splits.reduce((a,s)=>a+(s.pct||0), 0);
   const splitValid = splits.every(s=>s.activo) && Math.abs(totalPct-100)<0.01;
   const invoicesRef = useRef([]);
@@ -1326,60 +1329,126 @@ export default function App() {
           </div>}
 
           {/* ── Manual entry card for failed PDFs ── */}
-          {manualQueue.length > 0 && manualDraft && <div style={{ marginTop:24, background:"#0a1628", border:"1px solid #f59e0b44", borderRadius:12, overflow:"hidden" }}>
-            <div style={{ background:"#422006", padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <div style={{ fontSize:14, fontWeight:700, color:"#fbbf24" }}>⚠ Error IA — rellenar manualmente ({manualQueue.length} pendiente{manualQueue.length!==1?"s":""})</div>
-              <span style={{ fontSize:12, color:"#94a3b8" }}>{manualQueue[0].name}</span>
-            </div>
-            <div style={{ display:"flex", gap:20, padding:20, alignItems:"flex-start" }}>
-              {/* Left: PDF preview */}
-              <div style={{ flex:"0 0 360px", minWidth:280, maxHeight:500, overflow:"auto" }}>
-                {manualDraft._file && <PdfViewer file={manualDraft._file} />}
+          {manualQueue.length > 0 && manualDraft && (() => {
+            const manualTotalPct = manualSplits.reduce((a,s)=>a+(s.pct||0),0);
+            const manualSplitValid = manualSplits.every(s=>s.activo) && Math.abs(manualTotalPct-100)<0.01;
+            const advanceManual = () => {
+              setManualSplitMode(false); setManualSplits([{activo:"",pct:50},{activo:"",pct:50}]);
+              const remaining = manualQueue.slice(1);
+              setManualQueue(remaining);
+              if (remaining.length > 0) {
+                setManualDraft({ fecha:"", proveedor:"", concepto:"", activo:"", categoria:"", cuantia:0, iva:0, otros:null, numero:"", comentario:"", notas:"", archivo_origen:"", _file:remaining[0].file });
+              } else { setManualDraft(null); }
+            };
+            return <div style={{ marginTop:24, background:"#0a1628", border:"1px solid #f59e0b44", borderRadius:12, overflow:"hidden" }}>
+              <div style={{ background:"#422006", padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div style={{ fontSize:14, fontWeight:700, color:"#fbbf24" }}>⚠ Error IA — rellenar manualmente ({manualQueue.length} pendiente{manualQueue.length!==1?"s":""})</div>
+                <span style={{ fontSize:12, color:"#94a3b8" }}>{manualQueue[0].name}</span>
               </div>
-              {/* Right: form fields */}
-              <div style={{ flex:1, minWidth:260 }}>
-                <Field label="Fecha" value={manualDraft.fecha} onChange={v => setManualDraft(p=>({...p,fecha:v}))} required />
-                <Field label="Nº Factura" value={manualDraft.numero} onChange={v => setManualDraft(p=>({...p,numero:v}))} />
-                <Field label="Proveedor" value={manualDraft.proveedor} onChange={v => setManualDraft(p=>({...p,proveedor:v}))} required />
-                <Field label="Concepto" value={manualDraft.concepto} onChange={v => setManualDraft(p=>({...p,concepto:v}))} />
-                <Field label="Activo" value={manualDraft.activo} onChange={v => setManualDraft(p=>({...p,activo:v}))} required options={ACTIVOS} />
-                <Field label="Categoría" value={manualDraft.categoria} onChange={v => setManualDraft(p=>({...p,categoria:v}))} required options={CATEGORIAS} />
-                <div style={{ display:"flex", gap:10 }}>
-                  <Field label="Cuantía" type="number" value={manualDraft.cuantia||""} onChange={v => setManualDraft(p=>({...p,cuantia:parseFloat(v)||0}))} required />
-                  <Field label="IVA" type="number" value={manualDraft.iva||""} onChange={v => setManualDraft(p=>({...p,iva:parseFloat(v)||0}))} />
-                  <Field label="Retención" type="number" value={manualDraft.otros||""} onChange={v => setManualDraft(p=>({...p,otros:parseFloat(v)||null}))} />
+              <div style={{ display:"flex", gap:20, padding:20, alignItems:"flex-start" }}>
+                {/* Left: PDF preview */}
+                <div style={{ flex:"0 0 360px", minWidth:280, maxHeight:500, overflow:"auto" }}>
+                  {manualDraft._file && <PdfViewer file={manualDraft._file} />}
                 </div>
-                <div style={{ fontSize:12, color:"#475569", marginBottom:14 }}>
-                  Total: <span style={{ color:"#f87171", fontWeight:700 }}>{fmt((manualDraft.cuantia||0)+(manualDraft.iva||0)+(manualDraft.otros||0))}</span>
-                </div>
-                <div style={{ display:"flex", gap:10 }}>
-                  <button onClick={() => {
-                    if (!manualDraft.fecha || !manualDraft.proveedor || !manualDraft.activo || !manualDraft.categoria || !manualDraft.cuantia) {
-                      showFlash("Completa fecha, proveedor, activo, categoría y cuantía.", "err"); return;
-                    }
-                    const { _file, ...inv } = manualDraft;
-                    setReviewQueue(prev => [...prev, { ...inv, _file }]);
-                    const remaining = manualQueue.slice(1);
-                    setManualQueue(remaining);
-                    if (remaining.length > 0) {
-                      setManualDraft({ fecha: "", proveedor: "", concepto: "", activo: "", categoria: "", cuantia: 0, iva: 0, otros: null, numero: "", comentario: "", notas: "", archivo_origen: "", _file: remaining[0].file });
-                    } else {
-                      setManualDraft(null);
-                    }
-                    showFlash("✓ Añadido a la tabla de revisión.");
-                  }} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"8px 20px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600 }}>✓ Confirmar</button>
-                  <button onClick={() => {
-                    const remaining = manualQueue.slice(1);
-                    setManualQueue(remaining);
-                    if (remaining.length > 0) {
-                      setManualDraft({ fecha: "", proveedor: "", concepto: "", activo: "", categoria: "", cuantia: 0, iva: 0, otros: null, numero: "", comentario: "", notas: "", archivo_origen: "", _file: remaining[0].file });
-                    } else {
-                      setManualDraft(null);
-                    }
-                  }} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>Saltar</button>
+                {/* Right: form fields */}
+                <div style={{ flex:1, minWidth:260 }}>
+                  <Field label="Fecha" value={manualDraft.fecha} onChange={v => setManualDraft(p=>({...p,fecha:v}))} required />
+                  <Field label="Nº Factura" value={manualDraft.numero} onChange={v => setManualDraft(p=>({...p,numero:v}))} />
+                  <Field label="Proveedor" value={manualDraft.proveedor} onChange={v => setManualDraft(p=>({...p,proveedor:v}))} required />
+                  <Field label="Concepto" value={manualDraft.concepto} onChange={v => setManualDraft(p=>({...p,concepto:v}))} />
+                  {!manualSplitMode
+                    ? <Field label="Activo" value={manualDraft.activo} onChange={v => setManualDraft(p=>({...p,activo:v}))} required options={ACTIVOS} />
+                    : null}
+                  <Field label="Categoría" value={manualDraft.categoria} onChange={v => setManualDraft(p=>({...p,categoria:v}))} required options={CATEGORIAS} />
+                  <div style={{ display:"flex", gap:10 }}>
+                    <Field label="Cuantía" type="number" value={manualDraft.cuantia||""} onChange={v => setManualDraft(p=>({...p,cuantia:parseFloat(v)||0}))} required />
+                    <Field label="IVA" type="number" value={manualDraft.iva||""} onChange={v => setManualDraft(p=>({...p,iva:parseFloat(v)||0}))} />
+                    <Field label="Retención" type="number" value={manualDraft.otros||""} onChange={v => setManualDraft(p=>({...p,otros:parseFloat(v)||null}))} />
+                  </div>
+                  <div style={{ fontSize:12, color:"#475569", marginBottom:14 }}>
+                    Total: <span style={{ color:"#f87171", fontWeight:700 }}>{fmt((manualDraft.cuantia||0)+(manualDraft.iva||0)+(manualDraft.otros||0))}</span>
+                  </div>
+
+                  {/* Split mode */}
+                  <div style={{ marginBottom:14 }}>
+                    <button onClick={()=>{ setManualSplitMode(!manualSplitMode); setManualSplits([{activo:"",pct:50},{activo:"",pct:50}]); }}
+                      style={{ background:manualSplitMode?"#1e3a5f":"transparent", border:`1px solid ${manualSplitMode?"#3b82f6":"#1e3a5f"}`, color:manualSplitMode?"#93c5fd":"#475569", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>
+                      {manualSplitMode ? "✕ Cancelar split" : "⇅ Repartir entre activos"}
+                    </button>
+                  </div>
+                  {manualSplitMode && <div style={{ marginBottom:14 }}>
+                    {manualSplits.map((s, si) => (
+                      <SplitRow key={si} split={s} index={si} count={manualSplits.length}
+                        base={manualDraft.cuantia} iva={manualDraft.iva} otros={manualDraft.otros}
+                        onChange={(idx, field, val) => setManualSplits(prev => prev.map((x, j) => j===idx ? {...x, [field]:val} : x))}
+                        onRemove={(idx) => setManualSplits(prev => prev.filter((_,j)=>j!==idx))} />
+                    ))}
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <button onClick={()=>setManualSplits(prev=>[...prev,{activo:"",pct:0}])} style={{ background:"transparent", border:"1px solid #1e3a5f", color:"#475569", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>＋ Añadir</button>
+                      <span style={{ fontSize:11, color:Math.abs(manualTotalPct-100)<0.01?"#4ade80":"#f87171" }}>Total: {manualTotalPct.toFixed(1)}%</span>
+                    </div>
+                  </div>}
+
+                  <div style={{ display:"flex", gap:10 }}>
+                    <button onClick={() => {
+                      if (!manualDraft.fecha || !manualDraft.proveedor || !manualDraft.categoria || !manualDraft.cuantia) {
+                        showFlash("Completa fecha, proveedor, categoría y cuantía.", "err"); return;
+                      }
+                      if (manualSplitMode) {
+                        if (!manualSplitValid) { showFlash("Los % deben sumar 100% y todos los activos deben estar seleccionados.", "err"); return; }
+                        const newInvs = manualSplits.map((s, si) => ({
+                          ...manualDraft, _file: manualDraft._file, activo: s.activo,
+                          numero: manualDraft.numero ? `${manualDraft.numero}-${si+1}` : "",
+                          cuantia: parseFloat(((s.pct/100)*(manualDraft.cuantia||0)).toFixed(2)),
+                          iva: parseFloat(((s.pct/100)*(manualDraft.iva||0)).toFixed(2)),
+                          otros: manualDraft.otros!=null ? parseFloat(((s.pct/100)*(manualDraft.otros||0)).toFixed(2)) : null,
+                          comentario: `${s.pct}% de factura original`,
+                        }));
+                        setReviewQueue(prev => [...prev, ...newInvs]);
+                      } else {
+                        if (!manualDraft.activo) { showFlash("Selecciona el activo.", "err"); return; }
+                        const { _file, ...inv } = manualDraft;
+                        setReviewQueue(prev => [...prev, { ...inv, _file }]);
+                      }
+                      advanceManual();
+                      showFlash("✓ Añadido a la tabla de revisión.");
+                    }} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"8px 20px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600 }}>✓ Confirmar</button>
+                    <button onClick={() => {
+                      setSkippedQueue(prev => [...prev, { ...manualDraft, _filename: manualQueue[0].name }]);
+                      advanceManual();
+                      showFlash("Guardado en pendientes.");
+                    }} style={{ background:"transparent", border:"1px solid #1e3a5f", color:"#64748b", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>Saltar</button>
+                    <button onClick={() => {
+                      advanceManual();
+                      showFlash("Documento eliminado.", "warn");
+                    }} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>Eliminar</button>
+                  </div>
                 </div>
               </div>
-            </div>
+            </div>;
+          })()}
+
+          {/* ── Skipped / pending review ── */}
+          {skippedQueue.length > 0 && <div style={{ marginTop:20, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"14px 18px" }}>
+            <div style={{ fontSize:12, fontWeight:700, color:"#94a3b8", marginBottom:10 }}>Pendientes de revisión ({skippedQueue.length})</div>
+            {skippedQueue.map((item, i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:"1px solid #0d1f35" }}>
+                <div>
+                  <span style={{ fontSize:12, color:"#fbbf24" }}>{item._filename || "Sin nombre"}</span>
+                  {item.proveedor && <span style={{ fontSize:11, color:"#64748b", marginLeft:8 }}>{item.proveedor}</span>}
+                  {item.fecha && <span style={{ fontSize:11, color:"#475569", marginLeft:8 }}>{item.fecha}</span>}
+                </div>
+                <div style={{ display:"flex", gap:6 }}>
+                  <button onClick={() => {
+                    setManualQueue([{ name: item._filename, file: item._file }]);
+                    setManualDraft({ ...item }); setManualSplitMode(false); setManualSplits([{activo:"",pct:50},{activo:"",pct:50}]);
+                    setSkippedQueue(prev => prev.filter((_, j) => j !== i));
+                  }} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"3px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>Editar</button>
+                  <button onClick={() => setSkippedQueue(prev => prev.filter((_, j) => j !== i))}
+                    style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"3px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕</button>
+                </div>
+              </div>
+            ))}
           </div>}
 
           {/* ── Review table ── */}
