@@ -559,10 +559,54 @@ function PdfDropZone({ onFiles, files, disabled }) {
   );
 }
 
-function Field({ label, value, onChange, required, options, type="text" }) {
+// ─── Global style to hide number spinners ─────────────────────────────────
+const HIDE_SPINNERS = `input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield;appearance:textfield}`;
+if (!document.getElementById("hide-spinners")) {
+  const s = document.createElement("style"); s.id = "hide-spinners"; s.textContent = HIDE_SPINNERS;
+  document.head.appendChild(s);
+}
+
+function Field({ label, value, onChange, required, options, type="text", uppercase, negative, formula, dateAuto, suggestions }) {
+  const [showSugs, setShowSugs] = useState(false);
+  const [sugIdx, setSugIdx] = useState(-1);
+  const [formulaText, setFormulaText] = useState(null); // raw text while editing formula
+  const inputRef = useRef();
   const empty = required && (!value || value === "");
+
+  // Date auto-format: DD/MM/YYYY
+  const handleDateChange = (e) => {
+    let v = e.target.value.replace(/[^\d/]/g, "");
+    const raw = v.replace(/\//g, "");
+    if (raw.length >= 2 && !v.includes("/")) v = raw.slice(0,2) + "/" + raw.slice(2);
+    if (raw.length >= 4 && v.split("/").length < 3) {
+      const parts = raw;
+      v = parts.slice(0,2) + "/" + parts.slice(2,4) + "/" + parts.slice(4,8);
+    }
+    if (v.length > 10) v = v.slice(0,10);
+    onChange(v);
+  };
+
+  // Formula: evaluate "100+50+25" on blur
+  const evalFormula = (text) => {
+    if (text && /^[\d.,+\-\s]+$/.test(text) && text.includes("+")) {
+      try {
+        const result = text.split("+").reduce((s, n) => s + (parseFloat(n.replace(",",".").trim()) || 0), 0);
+        return parseFloat(result.toFixed(2));
+      } catch { return parseFloat(text.replace(",",".")) || 0; }
+    }
+    return parseFloat(String(text).replace(",",".")) || 0;
+  };
+
+  // Filtered suggestions
+  const filteredSugs = suggestions && value && value.length >= 2
+    ? [...new Set(suggestions)].filter(s => s && s.toLowerCase().startsWith(value.toLowerCase()) && s.toLowerCase() !== value.toLowerCase()).slice(0, 6)
+    : [];
+
+  const displayValue = formulaText !== null ? formulaText : (value ?? "");
+  const inputStyle = { width:"100%", background:empty?"#1f0a0a":"#0a1628", border:`1px solid ${empty?"#ef4444":"#1e3a5f"}`, borderRadius:6, color:"#e2e8f0", padding:"8px 10px", fontFamily:"inherit", fontSize:13, outline:"none", boxSizing:"border-box", ...(uppercase ? { textTransform:"uppercase" } : {}) };
+
   return (
-    <div style={{ marginBottom: 14 }}>
+    <div style={{ marginBottom: 14, position:"relative" }}>
       <div style={{ fontSize:11, color:empty?"#f87171":"#475569", marginBottom:4, letterSpacing:1, textTransform:"uppercase", display:"flex", alignItems:"center", gap:6 }}>
         {label}{empty && <span style={{color:"#f87171"}}>⚠</span>}
       </div>
@@ -571,7 +615,73 @@ function Field({ label, value, onChange, required, options, type="text" }) {
             <option value="">— seleccionar —</option>
             {options.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
-        : <input type={type} value={value||""} onChange={e=>onChange(e.target.value)} style={{ width:"100%", background:empty?"#1f0a0a":"#0a1628", border:`1px solid ${empty?"#ef4444":"#1e3a5f"}`, borderRadius:6, color:"#e2e8f0", padding:"8px 10px", fontFamily:"inherit", fontSize:13, outline:"none", boxSizing:"border-box" }} />}
+        : <div style={{ position:"relative" }}>
+            <input
+              ref={inputRef}
+              type={type}
+              value={displayValue}
+              placeholder={negative ? "-0.00" : ""}
+              onChange={e => {
+                let v = e.target.value;
+                if (uppercase) v = v.toUpperCase();
+                if (negative) {
+                  const cleaned = v.replace(/[^\d.,-]/g, "");
+                  const num = parseFloat(cleaned.replace(",",".")) || 0;
+                  onChange(num <= 0 ? num : -Math.abs(num));
+                  return;
+                }
+                if (dateAuto) { handleDateChange(e); return; }
+                if (formula) { setFormulaText(v); return; }
+                onChange(v);
+              }}
+              onFocus={() => {
+                if (suggestions) setShowSugs(true);
+                if (formula && formulaText === null && value) setFormulaText(String(value));
+              }}
+              onBlur={(e) => {
+                setTimeout(() => setShowSugs(false), 150);
+                if (formula && formulaText !== null) {
+                  const result = evalFormula(formulaText);
+                  onChange(result);
+                  setFormulaText(null);
+                }
+                if (negative && e.target.value) {
+                  const num = parseFloat(e.target.value.replace(",",".")) || 0;
+                  if (num > 0) onChange(-num);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (suggestions && filteredSugs.length > 0 && showSugs) {
+                  if (e.key === "Tab" || e.key === "Enter") {
+                    if (filteredSugs.length > 0) {
+                      e.preventDefault();
+                      const pick = sugIdx >= 0 ? filteredSugs[sugIdx] : filteredSugs[0];
+                      onChange(uppercase ? pick.toUpperCase() : pick);
+                      setShowSugs(false); setSugIdx(-1);
+                    }
+                  } else if (e.key === "ArrowDown") {
+                    e.preventDefault(); setSugIdx(prev => Math.min(prev + 1, filteredSugs.length - 1));
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault(); setSugIdx(prev => Math.max(prev - 1, -1));
+                  }
+                }
+              }}
+              style={inputStyle}
+            />
+            {/* Autocomplete dropdown */}
+            {suggestions && showSugs && filteredSugs.length > 0 && (
+              <div style={{ position:"absolute", top:"100%", left:0, right:0, background:"#0d1f35", border:"1px solid #1e3a5f", borderRadius:6, zIndex:50, maxHeight:180, overflowY:"auto", marginTop:2 }}>
+                {filteredSugs.map((s, i) => (
+                  <div key={s} onMouseDown={(e) => { e.preventDefault(); onChange(uppercase ? s.toUpperCase() : s); setShowSugs(false); }}
+                    style={{ padding:"7px 12px", fontSize:12, color: i === sugIdx ? "#93c5fd" : "#cbd5e1", background: i === sugIdx ? "#1e3a5f" : "transparent", cursor:"pointer" }}
+                    onMouseEnter={() => setSugIdx(i)}>
+                    {s}
+                  </div>
+                ))}
+                <div style={{ padding:"4px 12px", fontSize:10, color:"#475569", borderTop:"1px solid #1e3a5f" }}>Tab para autocompletar</div>
+              </div>
+            )}
+          </div>}
     </div>
   );
 }
@@ -1367,18 +1477,18 @@ export default function App() {
                 </div>
                 {/* Right: form fields */}
                 <div style={{ flex:1, minWidth:260 }}>
-                  <Field label="Fecha" value={manualDraft.fecha} onChange={v => setManualDraft(p=>({...p,fecha:v}))} required />
+                  <Field label="Fecha" value={manualDraft.fecha} onChange={v => setManualDraft(p=>({...p,fecha:v}))} required dateAuto />
                   <Field label="Nº Factura" value={manualDraft.numero} onChange={v => setManualDraft(p=>({...p,numero:v}))} />
-                  <Field label="Proveedor" value={manualDraft.proveedor} onChange={v => setManualDraft(p=>({...p,proveedor:v}))} required />
+                  <Field label="Proveedor" value={manualDraft.proveedor} onChange={v => setManualDraft(p=>({...p,proveedor:v}))} required uppercase suggestions={invoices.map(i=>i.proveedor).filter(Boolean)} />
                   <Field label="Concepto" value={manualDraft.concepto} onChange={v => setManualDraft(p=>({...p,concepto:v}))} />
                   {!manualSplitMode
                     ? <Field label="Activo" value={manualDraft.activo} onChange={v => setManualDraft(p=>({...p,activo:v}))} required options={ACTIVOS} />
                     : null}
                   <Field label="Categoría" value={manualDraft.categoria} onChange={v => setManualDraft(p=>({...p,categoria:v}))} required options={CATEGORIAS} />
                   <div style={{ display:"flex", gap:10 }}>
-                    <Field label="Cuantía" type="number" value={manualDraft.cuantia||""} onChange={v => setManualDraft(p=>({...p,cuantia:parseFloat(v)||0}))} required />
-                    <Field label="IVA" type="number" value={manualDraft.iva||""} onChange={v => setManualDraft(p=>({...p,iva:parseFloat(v)||0}))} />
-                    <Field label="Retención" type="number" value={manualDraft.otros||""} onChange={v => setManualDraft(p=>({...p,otros:parseFloat(v)||null}))} />
+                    <Field label="Cuantía" value={manualDraft.cuantia||""} onChange={v => setManualDraft(p=>({...p,cuantia:parseFloat(String(v).replace(",","."))||0}))} required formula />
+                    <Field label="IVA" value={manualDraft.iva||""} onChange={v => setManualDraft(p=>({...p,iva:parseFloat(String(v).replace(",","."))||0}))} formula />
+                    <Field label="Retención" value={manualDraft.otros} onChange={v => setManualDraft(p=>({...p,otros:v}))} negative />
                   </div>
                   <div style={{ fontSize:12, color:"#475569", marginBottom:14 }}>
                     Total: <span style={{ color:"#f87171", fontWeight:700 }}>{fmt((manualDraft.cuantia||0)+(manualDraft.iva||0)+(manualDraft.otros||0))}</span>
