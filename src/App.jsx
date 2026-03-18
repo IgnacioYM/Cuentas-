@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, fetchMovimientosBancarios, upsertMovimientosBancarios, deleteAllMovimientosBancarios, uploadFile, getSignedUrl, fetchConciliaciones, upsertConciliaciones, deleteConciliacion, updateFacturaEstado } from "./supabaseClient";
+import { fetchInvoices, upsertInvoices, deleteInvoice, deleteAllInvoices, updateSingleInvoice, fetchGastosFinancieros, upsertGastosFinancieros, fetchEscrituras, fetchMovimientosBancarios, upsertMovimientosBancarios, deleteAllMovimientosBancarios, uploadFile, getSignedUrl, fetchConciliaciones, upsertConciliaciones, deleteConciliacion, deleteAllConciliaciones, updateFacturaEstado } from "./supabaseClient";
 import DashboardTab from "./DashboardTab";
 import { ESCRITURAS } from "./escrituras";
 import { generarSugerencias, resumenConciliacion } from "./reconciliacion";
@@ -2018,11 +2018,17 @@ export default function App() {
             </div>
 
             {/* ── Action buttons ── */}
-            <div style={{ display:"flex", gap:12, marginBottom:24, alignItems:"center" }}>
+            <div style={{ display:"flex", gap:12, marginBottom:24, alignItems:"center", flexWrap:"wrap" }}>
               <button onClick={runAutoConciliar} disabled={concRunning} style={{ background:"#1d4ed8", border:"none", color:"#fff", padding:"10px 24px", borderRadius:8, cursor:concRunning?"wait":"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600, opacity:concRunning?0.6:1 }}>
                 {concRunning ? "⏳ Procesando…" : "🔄 Auto-conciliar"}
               </button>
               {concSugerencias.length > 0 && <span style={{ fontSize:12, color:"#fbbf24" }}>{concSugerencias.length} sugerencia(s) pendientes</span>}
+              {conciliaciones.length > 0 && <button onClick={async () => {
+                if (!window.confirm(`¿Borrar las ${conciliaciones.length} conciliaciones? Esta acción no se puede deshacer.`)) return;
+                const ok = await deleteAllConciliaciones();
+                if (ok) { setConciliaciones([]); setConcSugerencias([]); showFlash("Conciliaciones borradas.","warn"); }
+                else showFlash("Error al borrar.","err");
+              }} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontSize:12, fontFamily:"inherit", marginLeft:"auto" }}>🗑 Borrar conciliaciones ({conciliaciones.length})</button>}
             </div>
 
             {/* ── Sugerencias de conciliación ── */}
