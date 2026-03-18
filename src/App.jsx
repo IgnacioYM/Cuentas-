@@ -382,9 +382,10 @@ Si el documento es una DECLARACIÓN FISCAL (Modelo 111, 303, 200, 202, 347, 349,
 - NO mencionar retenciones ni datos obvios en notas.
 - En escrituras: incluir datos clave (notaría, protocolo, ref catastral, superficie).
 
-Responde SOLO JSON válido sin texto adicional:
-- Si es factura/documento contable: {"numero":"número exacto o vacío","fecha":"DD/MM/YYYY","proveedor":"nombre tal como aparece","concepto":"descripción breve","activo":"código o vacío si duda","categoria":"categoría exacta","cuantia":número,"iva":número,"otros":número_negativo_o_null,"notas":"solo si duda real, si no vacío"}
-- Si es declaración fiscal u otro documento no contabilizable: {"descartado":true,"motivo":"explicación breve","modelo":"nº modelo si aplica"}`;
+Responde SOLO JSON válido sin texto adicional. SIEMPRE un array JSON, incluso para un solo documento:
+- Facturas/documentos contables: [{"numero":"nº","fecha":"DD/MM/YYYY","proveedor":"nombre","concepto":"breve","activo":"código o vacío","categoria":"categoría exacta","cuantia":número,"iva":número,"otros":número_negativo_o_null,"notas":"solo si duda"}]
+- Declaraciones fiscales: [{"descartado":true,"motivo":"explicación","modelo":"nº modelo"}]
+- PDFs con varias facturas (una por página): un objeto por factura en el array`;
 
 // ─── Validación post-IA ───────────────────────────────────────────────────────
 const validateInvoice = (inv, filename) => {
@@ -920,10 +921,10 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 1024, system: SYSTEM_PROMPT,
+            model: "claude-sonnet-4-20250514", max_tokens: 4096, system: SYSTEM_PROMPT,
             messages: [{ role:"user", content:[
               { type:"document", source:{ type:"base64", media_type:"application/pdf", data:base64 }},
-              { type:"text", text:`Extrae y clasifica este documento (factura, escritura, ITP o lo que sea). Archivo: "${filename}". Responde SOLO el JSON.` }
+              { type:"text", text:`Extrae y clasifica TODAS las facturas de este documento. Si el PDF contiene varias facturas (una por página), devuelve un ARRAY JSON con un objeto por factura. Si es una sola factura, devuelve igualmente un array con un solo elemento. Archivo: "${filename}". Responde SOLO el JSON array.` }
             ]}]
           })
         });
@@ -931,14 +932,24 @@ export default function App() {
         if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message||`HTTP ${res.status}`); }
         const data = await res.json();
         const text = data.content.map(c=>c.text||"").join("");
-        const parsed = JSON.parse(text.replace(/```json|```/g,"").trim());
-        // If AI flagged as descartado, return it directly
-        if (parsed.descartado) return { _descartado: true, _motivo: parsed.motivo || "Documento descartado por IA", _filename: filename };
-        // Otherwise validate as invoice
-        const validated = validateInvoice(parsed, filename);
-        // If validateInvoice flagged it
-        if (validated._descartado) return { _descartado: true, _motivo: validated._motivo, _filename: filename };
-        return validated;
+        let parsed = JSON.parse(text.replace(/```json|```/g,"").trim());
+        // Normalize to array
+        if (!Array.isArray(parsed)) parsed = [parsed];
+        // Process each invoice
+        const results = [];
+        for (const item of parsed) {
+          if (item.descartado) {
+            results.push({ _descartado: true, _motivo: item.motivo || "Documento descartado por IA", _filename: filename });
+          } else {
+            const validated = validateInvoice(item, filename);
+            if (validated._descartado) {
+              results.push({ _descartado: true, _motivo: validated._motivo, _filename: filename });
+            } else {
+              results.push(validated);
+            }
+          }
+        }
+        return results;
       } catch(e) { if (attempt === retries) throw e; await new Promise(r => setTimeout(r, 2000)); }
     }
   };
@@ -971,10 +982,8 @@ export default function App() {
     const autoSaved = [], needsReview = [], descartados = [], failedPdfs = [];
     for (const { result, fd } of results) {
       if (result.status === "fulfilled" && result.value) {
-        if (result.value._descartado) {
-          descartados.push({ filename: fd.name, motivo: result.value._motivo });
-          continue;
-        }
+        // callAPI now returns an array of invoices
+        const items = Array.isArray(result.value) ? result.value : [result.value];
         let archivoPath = "";
         try {
           const datePrefix = new Date().toISOString().slice(0,7);
@@ -982,8 +991,14 @@ export default function App() {
           archivoPath = `facturas/${datePrefix}/${safeName}`;
           await uploadFile(fd.file, archivoPath);
         } catch { archivoPath = ""; }
-        const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "", archivo_origen: archivoPath };
-        needsReview.push({ ...inv, _file: fd.file });
+        for (const item of items) {
+          if (item._descartado) {
+            descartados.push({ filename: fd.name, motivo: item._motivo });
+          } else {
+            const inv = { ...item, numero: item.numero||"", otros: item.otros||null, comentario: "", archivo_origen: archivoPath };
+            needsReview.push({ ...inv, _file: fd.file });
+          }
+        }
       } else {
         failedPdfs.push(fd);
       }
