@@ -806,7 +806,9 @@ export default function App() {
   const [splitMode, setSplitMode]   = useState(false);
   const [splits, setSplits]         = useState([{activo:"",pct:50},{activo:"",pct:50}]);
   const [previewFile, setPreviewFile] = useState(null);
-  const [importLog, setImportLog]     = useState([]); // persistent log of errors + descartados
+  const [importLog, setImportLog]     = useState([]); // persistent log of descartados
+  const [manualQueue, setManualQueue] = useState([]); // failed PDFs pending manual entry
+  const [manualDraft, setManualDraft] = useState(null); // current manual entry fields
   const totalPct = splits.reduce((a,s)=>a+(s.pct||0), 0);
   const splitValid = splits.every(s=>s.activo) && Math.abs(totalPct-100)<0.01;
   const invoicesRef = useRef([]);
@@ -922,7 +924,7 @@ export default function App() {
             ]}]
           })
         });
-        if (res.status === 429) { await new Promise(r => setTimeout(r, (attempt+1)*3000)); continue; }
+        if (res.status === 429) { await new Promise(r => setTimeout(r, (attempt+1)*5000)); continue; }
         if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message||`HTTP ${res.status}`); }
         const data = await res.json();
         const text = data.content.map(c=>c.text||"").join("");
@@ -947,37 +949,25 @@ export default function App() {
       r.onload = e => res({ base64: e.target.result.split(",")[1], name: file.name, file });
       r.onerror = rej; r.readAsDataURL(file);
     })));
+    // Process in batches of 2 for speed
     const BATCH = 2, results = [];
-    for (let i=0; i<fileData.length; i+=BATCH) {
-      const batch = fileData.slice(i, i+BATCH);
+    for (let i = 0; i < fileData.length; i += BATCH) {
+      const batch = fileData.slice(i, i + BATCH);
       const br = await Promise.allSettled(batch.map(fd => callAPI(fd.base64, fd.name)));
-      for (let j = 0; j < br.length; j++) {
-        const r = br[j];
-        if (r.status === "fulfilled") {
-          results.push({ result: { status: "fulfilled", value: r.value }, fd: batch[j] });
-        } else {
-          // Capture full error message
-          const errMsg = r.reason?.message || (r.reason ? String(r.reason) : "Error desconocido");
-          console.error(`Error procesando ${batch[j].name}:`, r.reason);
-          // Retry once individually after a pause
-          try {
-            await new Promise(res => setTimeout(res, 3000));
-            const retryResult = await callAPI(batch[j].base64, batch[j].name);
-            results.push({ result: { status: "fulfilled", value: retryResult }, fd: batch[j] });
-            console.log(`Retry OK: ${batch[j].name}`);
-          } catch (retryErr) {
-            const retryMsg = retryErr?.message || String(retryErr);
-            results.push({ result: { status: "rejected", reason: `${errMsg} (retry: ${retryMsg})` }, fd: batch[j] });
-          }
-        }
-      }
-      setProgress({ current: Math.min(i+BATCH, fileData.length), total: fileData.length });
-      if (i+BATCH < fileData.length) await new Promise(r => setTimeout(r, 3000));
+      br.forEach((r, j) => {
+        results.push({
+          result: r.status === "fulfilled"
+            ? { status: "fulfilled", value: r.value }
+            : { status: "rejected", reason: r.reason?.message || "Error desconocido" },
+          fd: batch[j]
+        });
+      });
+      setProgress({ current: Math.min(i + BATCH, fileData.length), total: fileData.length });
+      if (i + BATCH < fileData.length) await new Promise(r => setTimeout(r, 3000));
     }
-    const autoSaved = [], needsReview = [], errors = [], descartados = [];
+    const autoSaved = [], needsReview = [], descartados = [], failedPdfs = [];
     for (const { result, fd } of results) {
       if (result.status === "fulfilled" && result.value) {
-        // Check if descartado
         if (result.value._descartado) {
           descartados.push({ filename: fd.name, motivo: result.value._motivo });
           continue;
@@ -989,25 +979,31 @@ export default function App() {
           archivoPath = `facturas/${datePrefix}/${safeName}`;
           await uploadFile(fd.file, archivoPath);
         } catch { archivoPath = ""; }
-
         const inv = { ...result.value, numero: result.value.numero||"", otros: result.value.otros||null, comentario: "", archivo_origen: archivoPath };
-        // ALL go to review — user always confirms
         needsReview.push({ ...inv, _file: fd.file });
-      } else errors.push({ filename: fd.name, error: result.reason||"Error desconocido" });
+      } else {
+        failedPdfs.push(fd);
+      }
     }
-    // Build persistent import log
+
+    // Import log: only descartados
     const log = [];
-    if (errors.length) errors.forEach(e => log.push({ type: "error", text: `❌ ${e.filename}: ${e.error}` }));
     if (descartados.length) descartados.forEach(d => log.push({ type: "skip", text: `⏭ ${d.filename}: ${d.motivo}` }));
     setImportLog(log);
 
+    // Failed PDFs → manual queue (individual card entry before review table)
+    if (failedPdfs.length > 0) {
+      setManualQueue(failedPdfs);
+      setManualDraft({ fecha: "", proveedor: "", concepto: "", activo: "", categoria: "", cuantia: 0, iva: 0, otros: null, numero: "", comentario: "", notas: "", archivo_origen: "", _file: failedPdfs[0].file });
+    }
+
     setAnalyzing(false); setProgress({ current:0, total:0 }); setPdfFiles([]);
     const msgs = [];
-    if (needsReview.length) msgs.push(`${needsReview.length} factura(s) para revisión`);
+    if (needsReview.length) msgs.push(`${needsReview.length} documento(s) para revisión`);
+    if (failedPdfs.length) msgs.push(`${failedPdfs.length} con error (rellenar a mano)`);
     if (descartados.length) msgs.push(`${descartados.length} descartado(s)`);
-    if (errors.length) msgs.push(`${errors.length} error(es)`);
     if (msgs.length === 0) showFlash("No se procesó ningún documento.", "warn");
-    else showFlash(msgs.join(" · "), needsReview.length > 0 ? "ok" : errors.length > 0 ? "err" : "warn");
+    else showFlash(msgs.join(" · "), needsReview.length > 0 ? "ok" : "warn");
     if (needsReview.length > 0) {
       setReviewQueue(needsReview); setReviewIdx(0); setDraft(needsReview[0]);
     }
@@ -1318,18 +1314,75 @@ export default function App() {
             </div>
           </div>
 
-          {/* ── Import log (errors + descartados) ── */}
+          {/* ── Import log (descartados) ── */}
           {importLog.length > 0 && <div style={{ marginTop:20, background:"#0a1628", border:"1px solid #1e3a5f", borderRadius:10, padding:"14px 18px" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
               <span style={{ fontSize:12, fontWeight:700, color:"#94a3b8" }}>Log de importación</span>
               <button onClick={()=>setImportLog([])} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ cerrar</button>
             </div>
             {importLog.map((entry, i) => (
-              <div key={i} style={{ fontSize:12, color: entry.type === "error" ? "#f87171" : "#fbbf24", padding:"3px 0" }}>{entry.text}</div>
+              <div key={i} style={{ fontSize:12, color:"#fbbf24", padding:"3px 0" }}>{entry.text}</div>
             ))}
           </div>}
 
-          {/* ── Review table (no PDF viewer unless click) ── */}
+          {/* ── Manual entry card for failed PDFs ── */}
+          {manualQueue.length > 0 && manualDraft && <div style={{ marginTop:24, background:"#0a1628", border:"1px solid #f59e0b44", borderRadius:12, overflow:"hidden" }}>
+            <div style={{ background:"#422006", padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div style={{ fontSize:14, fontWeight:700, color:"#fbbf24" }}>⚠ Error IA — rellenar manualmente ({manualQueue.length} pendiente{manualQueue.length!==1?"s":""})</div>
+              <span style={{ fontSize:12, color:"#94a3b8" }}>{manualQueue[0].name}</span>
+            </div>
+            <div style={{ display:"flex", gap:20, padding:20, alignItems:"flex-start" }}>
+              {/* Left: PDF preview */}
+              <div style={{ flex:"0 0 360px", minWidth:280, maxHeight:500, overflow:"auto" }}>
+                {manualDraft._file && <PdfViewer file={manualDraft._file} />}
+              </div>
+              {/* Right: form fields */}
+              <div style={{ flex:1, minWidth:260 }}>
+                <Field label="Fecha" value={manualDraft.fecha} onChange={v => setManualDraft(p=>({...p,fecha:v}))} required />
+                <Field label="Nº Factura" value={manualDraft.numero} onChange={v => setManualDraft(p=>({...p,numero:v}))} />
+                <Field label="Proveedor" value={manualDraft.proveedor} onChange={v => setManualDraft(p=>({...p,proveedor:v}))} required />
+                <Field label="Concepto" value={manualDraft.concepto} onChange={v => setManualDraft(p=>({...p,concepto:v}))} />
+                <Field label="Activo" value={manualDraft.activo} onChange={v => setManualDraft(p=>({...p,activo:v}))} required options={ACTIVOS} />
+                <Field label="Categoría" value={manualDraft.categoria} onChange={v => setManualDraft(p=>({...p,categoria:v}))} required options={CATEGORIAS} />
+                <div style={{ display:"flex", gap:10 }}>
+                  <Field label="Cuantía" type="number" value={manualDraft.cuantia||""} onChange={v => setManualDraft(p=>({...p,cuantia:parseFloat(v)||0}))} required />
+                  <Field label="IVA" type="number" value={manualDraft.iva||""} onChange={v => setManualDraft(p=>({...p,iva:parseFloat(v)||0}))} />
+                  <Field label="Retención" type="number" value={manualDraft.otros||""} onChange={v => setManualDraft(p=>({...p,otros:parseFloat(v)||null}))} />
+                </div>
+                <div style={{ fontSize:12, color:"#475569", marginBottom:14 }}>
+                  Total: <span style={{ color:"#f87171", fontWeight:700 }}>{fmt((manualDraft.cuantia||0)+(manualDraft.iva||0)+(manualDraft.otros||0))}</span>
+                </div>
+                <div style={{ display:"flex", gap:10 }}>
+                  <button onClick={() => {
+                    if (!manualDraft.fecha || !manualDraft.proveedor || !manualDraft.activo || !manualDraft.categoria || !manualDraft.cuantia) {
+                      showFlash("Completa fecha, proveedor, activo, categoría y cuantía.", "err"); return;
+                    }
+                    const { _file, ...inv } = manualDraft;
+                    setReviewQueue(prev => [...prev, { ...inv, _file }]);
+                    const remaining = manualQueue.slice(1);
+                    setManualQueue(remaining);
+                    if (remaining.length > 0) {
+                      setManualDraft({ fecha: "", proveedor: "", concepto: "", activo: "", categoria: "", cuantia: 0, iva: 0, otros: null, numero: "", comentario: "", notas: "", archivo_origen: "", _file: remaining[0].file });
+                    } else {
+                      setManualDraft(null);
+                    }
+                    showFlash("✓ Añadido a la tabla de revisión.");
+                  }} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"8px 20px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:600 }}>✓ Confirmar</button>
+                  <button onClick={() => {
+                    const remaining = manualQueue.slice(1);
+                    setManualQueue(remaining);
+                    if (remaining.length > 0) {
+                      setManualDraft({ fecha: "", proveedor: "", concepto: "", activo: "", categoria: "", cuantia: 0, iva: 0, otros: null, numero: "", comentario: "", notas: "", archivo_origen: "", _file: remaining[0].file });
+                    } else {
+                      setManualDraft(null);
+                    }
+                  }} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>Saltar</button>
+                </div>
+              </div>
+            </div>
+          </div>}
+
+          {/* ── Review table ── */}
           {reviewQueue.length > 0 && <div style={{ marginTop:28 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ fontSize:15, fontWeight:700, color:"#f59e0b" }}>⚠ {reviewQueue.length} documentos pendientes de revisión</div>
@@ -1337,7 +1390,7 @@ export default function App() {
                 <button onClick={()=>{
                   const valid = reviewQueue.filter(inv => inv.fecha && inv.proveedor && inv.categoria && inv.cuantia && inv.activo);
                   if (valid.length === 0) { showFlash("Rellena al menos activo y categoría en cada fila.","err"); return; }
-                  const toSave = valid.map(inv => { const { _file, ...rest } = inv; return { ...rest, id: crypto.randomUUID() }; });
+                  const toSave = valid.map(inv => { const { _file, _error, ...rest } = inv; return { ...rest, id: crypto.randomUUID() }; });
                   addInvoices(toSave);
                   const remaining = reviewQueue.filter(inv => !(inv.fecha && inv.proveedor && inv.categoria && inv.cuantia && inv.activo));
                   setReviewQueue(remaining);
@@ -1375,7 +1428,7 @@ export default function App() {
                         <td style={{ padding:"4px 6px", textAlign:"center", whiteSpace:"nowrap" }}>
                           <button onClick={()=>{
                             if (!inv.fecha || !inv.proveedor || !inv.categoria || !inv.cuantia || !inv.activo) { showFlash("Completa fecha, proveedor, activo, categoría y cuantía.","err"); return; }
-                            const { _file, ...rest } = inv;
+                            const { _file, _error, ...rest } = inv;
                             addInvoices([{ ...rest, id: crypto.randomUUID() }]);
                             setReviewQueue(prev => prev.filter((_,j) => j!==i));
                             showFlash("✓ Factura guardada.");
