@@ -772,7 +772,8 @@ export default function App() {
   const [tab, setTab]               = useState("importar");
   const [flash, setFlash]           = useState(null);
   const [delConfirm, setDelConfirm] = useState(null);
-  const [confirmBorrarTodo, setConfirmBorrarTodo] = useState(false);
+  const [confirmBorrarTodoStep, setConfirmBorrarTodoStep] = useState(0); // 0=off, 1=first confirm, 2=second confirm
+  const [confirmBorrarFacturas, setConfirmBorrarFacturas] = useState(false);
   const [loaded, setLoaded]         = useState(false);
   const [filterCat, setFilterCat]   = useState("Todas");
   const [filterQ, setFilterQ]       = useState("Todos");
@@ -1324,12 +1325,27 @@ export default function App() {
               {editMode && <button onClick={addManualRow} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>＋ Añadir fila</button>}
               <button onClick={()=>{ setEditMode(v=>!v); cancelEdit(); }} style={{ background:editMode?"#1e3a5f":"transparent", border:`1px solid ${editMode?"#3b82f6":"#1e3a5f"}`, color:editMode?"#93c5fd":"#64748b", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{editMode?"✓ Salir de edición":"✏ Editar"}</button>
               <button onClick={exportCSV} style={{ background:"#0f2942", border:"1px solid #1e3a5f", color:"#93c5fd", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Exportar CSV</button>
-              {!confirmBorrarTodo
-                ? <button onClick={()=>setConfirmBorrarTodo(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar facturas</button>
+              {confirmBorrarTodoStep===0
+                ? <button onClick={()=>setConfirmBorrarTodoStep(1)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar todo</button>
+                : confirmBorrarTodoStep===1
+                ? <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <span style={{ fontSize:12, color:"#f87171" }}>¿Borrar TODOS los datos?</span>
+                    <button onClick={()=>setConfirmBorrarTodoStep(2)} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
+                    <button onClick={()=>setConfirmBorrarTodoStep(0)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
+                  </span>
                 : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
-                    <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro?</span>
-                    <button onClick={()=>{ setInvoices([]); invoicesRef.current=[]; deleteAllInvoices().catch(()=>{}); setConfirmBorrarTodo(false); showFlash("Facturas eliminadas.","err"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
-                    <button onClick={()=>setConfirmBorrarTodo(false)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
+                    <span style={{ fontSize:12, color:"#ef4444", fontWeight:700 }}>⚠ Se borrarán facturas, movimientos, conciliaciones y G. Financieros. ¿Seguro?</span>
+                    <button onClick={async ()=>{
+                      await deleteAllConciliaciones().catch(()=>{});
+                      await deleteAllMovimientosBancarios().catch(()=>{});
+                      await deleteAllGastosFinancieros().catch(()=>{});
+                      setInvoices([]); invoicesRef.current=[]; await deleteAllInvoices().catch(()=>{});
+                      setBankMovements([]); setConciliaciones([]); setEntries([]);
+                      try { localStorage.removeItem("gf-entries-arena-nexus"); } catch{}
+                      setConfirmBorrarTodoStep(0);
+                      showFlash("Todos los datos eliminados (excepto escrituras).","err");
+                    }} style={{ background:"#7f1d1d", border:"1px solid #ef4444", color:"#fca5a5", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:700 }}>CONFIRMAR</button>
+                    <button onClick={()=>setConfirmBorrarTodoStep(0)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Cancelar</button>
                   </span>}
             </div>
           </div>
@@ -1462,7 +1478,16 @@ export default function App() {
 
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
               <div style={{ fontSize:12, color:"#475569" }}>{facturasIVA.length} facturas{filterQ!=="Todos" ? ` en ${filterQ}` : ""}</div>
-              {hasFacFilters && <button onClick={()=>setFacFilters({})} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
+              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                {hasFacFilters && <button onClick={()=>setFacFilters({})} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
+                {!confirmBorrarFacturas
+                  ? <button onClick={()=>setConfirmBorrarFacturas(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar facturas</button>
+                  : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro? Se borrarán {invoices.length} facturas</span>
+                      <button onClick={async ()=>{ setInvoices([]); invoicesRef.current=[]; await deleteAllInvoices().catch(()=>{}); setConfirmBorrarFacturas(false); showFlash("Facturas eliminadas.","err"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
+                      <button onClick={()=>setConfirmBorrarFacturas(false)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
+                    </span>}
+              </div>
             </div>
 
             <div style={{ overflowX:"auto" }}>
