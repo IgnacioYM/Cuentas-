@@ -508,6 +508,25 @@ const validateInvoice = (inv, filename) => {
   return v;
 };
 
+// ─── Detectar si un documento es un impuesto (ITP, IBI, ICIO, etc.) ─────────
+const isImpuesto = (inv) => {
+  const prov = (inv.proveedor||"").toLowerCase();
+  const concepto = (inv.concepto||"").toLowerCase();
+  // ITP
+  if (concepto.includes("itp") || concepto.includes("transmisiones patrimoniales")) return true;
+  if (concepto.includes("modelo 600")) return true;
+  // IBI
+  if (concepto.includes("ibi") || concepto.includes("impuesto sobre bienes inmuebles")) return true;
+  // ICIO (ya va como Capex en Ajuntament, pero por si acaso)
+  if (concepto.includes("icio") && (prov.includes("ajuntament") || prov.includes("ayuntamiento"))) return true;
+  // Agencia Tributaria / Comunidad de Madrid con ITP
+  if ((prov.includes("agencia tributaria") || prov.includes("comunidad de madrid") || prov.includes("hacienda")) &&
+      (concepto.includes("compraventa") || concepto.includes("transmisi"))) return true;
+  // Generic tax patterns
+  if (prov.includes("comunidad de madrid") && concepto.includes("modelo 600")) return true;
+  return false;
+};
+
 const fmt = n => new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", minimumFractionDigits: 2 }).format(n);
 const parseDate = d => { if (!d) return new Date(0); const [day,mon,yr] = d.split("/"); return new Date(`${yr}-${mon}-${day}`); };
 const invoiceKey = inv => {
@@ -1270,7 +1289,8 @@ export default function App() {
       m.push({ id: esc.id || `esc-${esc.activo}`, fecha: esc.fecha_firma, tipo: "Escritura", proveedor: esc.datos_extra?.vendedora || ESCRITURAS[esc.activo]?.vendedor || "", concepto: `Compraventa ${nombre}`, activo: esc.activo, categoria: "Adquisición (incluye gastos e impuestos)", cuantia: esc.precio, iva: 0, otros: 0, archivo_origen: esc.archivo_origen || "" });
     });
     invoices.forEach(inv => {
-      m.push({ id: inv.id, fecha: inv.fecha, tipo: "Factura", proveedor: inv.proveedor, concepto: inv.concepto, activo: inv.activo, categoria: inv.categoria, cuantia: inv.cuantia||0, iva: inv.iva||0, otros: inv.otros||0, archivo_origen: inv.archivo_origen || "" });
+      const tipo = isImpuesto(inv) ? "Impuesto" : "Factura";
+      m.push({ id: inv.id, fecha: inv.fecha, tipo, proveedor: inv.proveedor, concepto: inv.concepto, activo: inv.activo, categoria: inv.categoria, cuantia: inv.cuantia||0, iva: inv.iva||0, otros: inv.otros||0, archivo_origen: inv.archivo_origen || "" });
     });
     entries.forEach(e => {
       m.push({ id: e.id, fecha: e.date, tipo: "G. Financiero", proveedor: e.account==="CC"?"Cuenta Corriente":"Póliza Crédito", concepto: e.concept, activo: "AN", categoria: e.cat, cuantia: Math.abs(e.amount), iva: 0, otros: 0, archivo_origen: "" });
@@ -1356,7 +1376,7 @@ export default function App() {
   const hasDoc = (path) => path && path.includes("/"); // valid storage path has a folder
 
   // Facturas para IVA/IRPF — with quarter + column filtering
-  const allFacturasIVA = invoices.filter(inv => (inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim()));
+  const allFacturasIVA = invoices.filter(inv => !isImpuesto(inv) && ((inv.iva||0)!==0 || (inv.otros||0)!==0 || (inv.numero && inv.numero.trim())));
   const quarters = [...new Set(allFacturasIVA.map(inv => getQuarter(inv.fecha)).filter(Boolean))].sort();
   let facturasIVA = filterQ === "Todos" ? [...allFacturasIVA]
     : filterQ.length === 4 && !filterQ.includes("T")
@@ -1731,8 +1751,8 @@ export default function App() {
               <tbody>
                 {bdMovements.map((mov,i) => {
                   const t = (mov.cuantia||0)+(mov.iva||0)+(mov.otros||0);
-                  const tc = mov.tipo==="Escritura"?"#4ade80":mov.tipo==="G. Financiero"?"#8b5cf6":"#60a5fa";
-                  const isEditing = editingId === mov.id && mov.tipo === "Factura";
+                  const tc = mov.tipo==="Escritura"?"#4ade80":mov.tipo==="G. Financiero"?"#8b5cf6":mov.tipo==="Impuesto"?"#fb923c":"#60a5fa";
+                  const isEditing = editingId === mov.id && (mov.tipo === "Factura" || mov.tipo === "Impuesto");
 
                   if (isEditing && editDraft) {
                     // ── Editing row ──
@@ -1760,7 +1780,7 @@ export default function App() {
                   }
 
                   // ── Normal row ──
-                  return <tr key={mov.id+"-"+i} style={{ background:i%2===0?"#0a1628":"#080f1a", cursor:editMode&&mov.tipo==="Factura"?"pointer":"default" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"} onClick={()=>{ if(editMode && mov.tipo==="Factura" && editingId!==mov.id) startEdit(mov); }}>
+                  return <tr key={mov.id+"-"+i} style={{ background:i%2===0?"#0a1628":"#080f1a", cursor:editMode&&(mov.tipo==="Factura"||mov.tipo==="Impuesto")?"pointer":"default" }} onMouseEnter={e=>e.currentTarget.style.background="#0d1f35"} onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#0a1628":"#080f1a"} onClick={()=>{ if(editMode && (mov.tipo==="Factura"||mov.tipo==="Impuesto") && editingId!==mov.id) startEdit(mov); }}>
                     <td style={{ padding:"8px 10px", color:"#94a3b8", whiteSpace:"nowrap" }}>{mov.fecha}</td>
                     <td style={{ padding:"8px 10px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(mov.fecha)}</span></td>
                     <td style={{ padding:"8px 10px" }}><span style={{ background:`${tc}15`, color:tc, border:`1px solid ${tc}30`, padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{mov.tipo}</span></td>
@@ -1773,7 +1793,7 @@ export default function App() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:mov.otros?"#f59e0b":"#334155" }}>{mov.otros?fmt(mov.otros):"—"}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#f87171", fontWeight:600 }}>{fmt(t)}</td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
-                      {mov.tipo==="Factura" ? (() => { const paid = bdConcFacIds.has(mov.id); return <span style={{ background:paid?"#052e16":"#1c1917", color:paid?"#4ade80":"#f59e0b", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{paid?"Pagada":"Pdte"}</span>; })() : <span style={{ color:"#1e3a5f", fontSize:10 }}>—</span>}
+                      {(mov.tipo==="Factura"||mov.tipo==="Impuesto") ? (() => { const paid = bdConcFacIds.has(mov.id); return <span style={{ background:paid?"#052e16":"#1c1917", color:paid?"#4ade80":"#f59e0b", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{paid?"Pagada":"Pdte"}</span>; })() : <span style={{ color:"#1e3a5f", fontSize:10 }}>—</span>}
                     </td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
                       {hasDoc(mov.archivo_origen)
@@ -1781,7 +1801,7 @@ export default function App() {
                         : <span style={{ color:"#1e3a5f", fontSize:11 }}>—</span>}
                     </td>
                     <td style={{ padding:"8px 6px", textAlign:"center" }}>
-                      {mov.tipo==="Factura" && !editMode && (delConfirm===mov.id
+                      {(mov.tipo==="Factura"||mov.tipo==="Impuesto") && !editMode && (delConfirm===mov.id
                         ? <span><button onClick={()=>{ const u=invoices.filter(x=>x.id!==mov.id); invoicesRef.current=u; setInvoices(u); deleteInvoice(mov.id).catch(()=>{}); setDelConfirm(null); showFlash("Eliminada.","warn"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"2px 7px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginRight:4 }}>Sí</button><button onClick={()=>setDelConfirm(null)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"2px 7px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>No</button></span>
                         : <button onClick={(e)=>{e.stopPropagation();setDelConfirm(mov.id)}} style={{ background:"transparent", border:"none", color:"#334155", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✕</button>)}
                     </td>
