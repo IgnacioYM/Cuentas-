@@ -510,19 +510,19 @@ const validateInvoice = (inv, filename) => {
 
 // ─── Detectar si un documento es un impuesto (ITP, IBI, ICIO, etc.) ─────────
 const isImpuesto = (inv) => {
+  // Manual override via comentario tag
+  const com = (inv.comentario||"").toLowerCase();
+  if (com.includes("[tipo:impuesto]")) return true;
+  if (com.includes("[tipo:factura]")) return false;
+  // Auto-detect
   const prov = (inv.proveedor||"").toLowerCase();
   const concepto = (inv.concepto||"").toLowerCase();
-  // ITP
   if (concepto.includes("itp") || concepto.includes("transmisiones patrimoniales")) return true;
   if (concepto.includes("modelo 600")) return true;
-  // IBI
   if (concepto.includes("ibi") || concepto.includes("impuesto sobre bienes inmuebles")) return true;
-  // ICIO (ya va como Capex en Ajuntament, pero por si acaso)
   if (concepto.includes("icio") && (prov.includes("ajuntament") || prov.includes("ayuntamiento"))) return true;
-  // Agencia Tributaria / Comunidad de Madrid con ITP
   if ((prov.includes("agencia tributaria") || prov.includes("comunidad de madrid") || prov.includes("hacienda")) &&
       (concepto.includes("compraventa") || concepto.includes("transmisi"))) return true;
-  // Generic tax patterns
   if (prov.includes("comunidad de madrid") && concepto.includes("modelo 600")) return true;
   return false;
 };
@@ -1346,7 +1346,7 @@ export default function App() {
   const saveEdit = async () => {
     if (!editDraft) return;
     // Update in the correct store based on type
-    const updated = invoices.map(inv => inv.id === editDraft.id ? { ...inv, fecha: editDraft.fecha, proveedor: editDraft.proveedor, concepto: editDraft.concepto, activo: editDraft.activo, categoria: editDraft.categoria, cuantia: parseFloat(editDraft.cuantia)||0, iva: parseFloat(editDraft.iva)||0, otros: editDraft.otros ? parseFloat(editDraft.otros) : null } : inv);
+    const updated = invoices.map(inv => inv.id === editDraft.id ? { ...inv, fecha: editDraft.fecha, proveedor: editDraft.proveedor, concepto: editDraft.concepto, activo: editDraft.activo, categoria: editDraft.categoria, cuantia: parseFloat(editDraft.cuantia)||0, iva: parseFloat(editDraft.iva)||0, otros: editDraft.otros ? parseFloat(editDraft.otros) : null, comentario: editDraft.comentario||"" } : inv);
     invoicesRef.current = updated;
     setInvoices(updated);
     // Sync single invoice to Supabase
@@ -1553,14 +1553,25 @@ export default function App() {
                   </div>}
 
                   <div style={{ display:"flex", gap:10 }}>
-                    <button onClick={() => {
+                    <button onClick={async () => {
                       if (!manualDraft.fecha || !manualDraft.proveedor || !manualDraft.categoria || !manualDraft.cuantia) {
                         showFlash("Completa fecha, proveedor, categoría y cuantía.", "err"); return;
+                      }
+                      // Upload PDF to Storage
+                      let archivoPath = "";
+                      if (manualDraft._file) {
+                        try {
+                          const datePrefix = new Date().toISOString().slice(0,7);
+                          const safeName = manualQueue[0].name.replace(/[^a-zA-Z0-9._-]/g, "_");
+                          archivoPath = `facturas/${datePrefix}/${safeName}`;
+                          await uploadFile(manualDraft._file, archivoPath);
+                        } catch { archivoPath = ""; }
                       }
                       if (manualSplitMode) {
                         if (!manualSplitValid) { showFlash("Los % deben sumar 100% y todos los activos deben estar seleccionados.", "err"); return; }
                         const newInvs = manualSplits.map((s, si) => ({
                           ...manualDraft, _file: manualDraft._file, activo: s.activo,
+                          archivo_origen: archivoPath,
                           numero: manualDraft.numero ? `${manualDraft.numero}-${si+1}` : "",
                           cuantia: parseFloat(((s.pct/100)*(manualDraft.cuantia||0)).toFixed(2)),
                           iva: parseFloat(((s.pct/100)*(manualDraft.iva||0)).toFixed(2)),
@@ -1571,7 +1582,7 @@ export default function App() {
                       } else {
                         if (!manualDraft.activo) { showFlash("Selecciona el activo.", "err"); return; }
                         const { _file, ...inv } = manualDraft;
-                        setReviewQueue(prev => [...prev, { ...inv, _file }]);
+                        setReviewQueue(prev => [...prev, { ...inv, _file, archivo_origen: archivoPath }]);
                       }
                       advanceManual();
                       showFlash("✓ Añadido a la tabla de revisión.");
@@ -1761,7 +1772,16 @@ export default function App() {
                     return <tr key={mov.id+"-edit"} style={{ background:"#0d1f35" }}>
                       <td style={{ padding:"4px 6px" }}><input value={ed.fecha||""} onChange={e=>setEditDraft(d=>({...d,fecha:e.target.value}))} style={{ width:80, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
                       <td style={{ padding:"4px 6px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(ed.fecha)}</span></td>
-                      <td style={{ padding:"4px 6px" }}><span style={{ color:"#60a5fa", fontSize:10 }}>Factura</span></td>
+                      <td style={{ padding:"4px 6px" }}><select value={isImpuesto(ed) ? "Impuesto" : "Factura"} onChange={e=>{
+                        const newTipo = e.target.value;
+                        setEditDraft(d => {
+                          let com = (d.comentario||"").replace(/\[tipo:\w+\]/gi, "").trim();
+                          const autoTipo = isImpuesto({...d, comentario:""});
+                          // Only add tag if overriding the auto-detected tipo
+                          if ((newTipo==="Impuesto") !== autoTipo) com = `[tipo:${newTipo}] ${com}`.trim();
+                          return {...d, comentario: com};
+                        });
+                      }} style={{ background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:11, outline:"none" }}><option value="Factura">Factura</option><option value="Impuesto">Impuesto</option></select></td>
                       <td style={{ padding:"4px 6px" }}><input value={ed.proveedor||""} onChange={e=>setEditDraft(d=>({...d,proveedor:e.target.value}))} style={{ width:120, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
                       <td style={{ padding:"4px 6px" }}><input value={ed.concepto||""} onChange={e=>setEditDraft(d=>({...d,concepto:e.target.value}))} style={{ width:140, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
                       <td style={{ padding:"4px 6px" }}><select value={ed.activo||""} onChange={e=>setEditDraft(d=>({...d,activo:e.target.value}))} style={{ background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select></td>
