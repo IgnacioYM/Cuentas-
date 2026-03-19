@@ -308,12 +308,30 @@ NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIO
   EJEMPLO REAL: BI=1.296,85€ + suplidos (7,95+0,15+0,15)=8,25€ → cuantia = 1.296,85 + 8,25 = 1.305,10€
   Suma cada céntimo. Comprueba que cuantia + iva + otros = Total Factura.
 
-AGENCIA TRIBUTARIA:
+AGENCIA TRIBUTARIA / COMUNIDAD DE MADRID / MODELO 600 (ITP):
 - ITP ~13.617€ → BB5, Adquisición
 - ITP ~18.788€ → PR30, Adquisición
 - ITP ~15.056€ → FMM3, Adquisición
 - ITP ~26.000€ → PB27, Adquisición
-- Cualquier ITP → Adquisición, activo por importe más cercano
+- Cualquier ITP individual → Adquisición, activo por importe más cercano
+- CRÍTICO: Si el ITP/Modelo 600 cubre VARIOS inmuebles (ver Anexo 1 con varias direcciones):
+  · Generar UN OBJETO JSON POR INMUEBLE en el array
+  · Repartir la cuota proporcionalmente al valor declarado de cada inmueble
+  · Usar estas direcciones para asignar activo:
+    - Elfo 65, Madrid → E65
+    - Molino 1, Villanueva de la Cañada → M1
+    - Alfonso Gómez 55, Madrid → AG55
+    - Barrera de Baix, Palma → BB5
+    - Francesc Martí Mora, Palma → FMM3
+    - Pascual Ribot, Palma → PR30
+    - Pau Bouvy / Padre Bartolomé, Palma → PB27
+  · Ejemplo: ITP total 13.005,55€ sobre 3 inmuebles con valores 188.921,78 + 179.000 + 282.355,79 = 650.277,57
+    → E65: 13.005,55 × (188.921,78 / 650.277,57) = 3.778,44€
+    → M1:  13.005,55 × (179.000 / 650.277,57) = 3.580,00€
+    → AG55: 13.005,55 × (282.355,79 / 650.277,57) = 5.647,11€
+  · proveedor = "Agencia Tributaria" o "Comunidad de Madrid" según aparezca
+  · iva = 0, otros = null (ITP no lleva IVA ni retención)
+  · concepto = "ITP Compraventa [dirección]"
 
 GABRIEL LLABRÉS COMAMALA:
 - Siempre → BB5, Capex (arquitecto)
