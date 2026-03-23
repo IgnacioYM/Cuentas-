@@ -285,10 +285,12 @@ ZADAL:
 FINUTIVE:
 - Siempre → AN, Costes de implementación
 
-REGISTRADORES ESPAÑA / REGISTRO MERCANTIL / JOSE MIGUEL BAÑON BERNARD:
+REGISTRADORES ESPAÑA / REGISTRO MERCANTIL / REGISTRO DE LA PROPIEDAD / JOSE MIGUEL BAÑON BERNARD:
 - "Nota de registro", registros genéricos → AN, Opex
 - Registro de constitución sociedad → AN, Costes de implementación
 - Registro de propiedad post-compraventa → activo según inmueble, Adquisición
+  · Si referencia un nº de protocolo: usar tabla de protocolos (577→BB5, 2214→FMM3, 2221→PR30, 2457→PB27, 2731→E65/M1/AG55)
+  · Si referencia dirección del inmueble: usar tabla de direcciones
 
 NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIOS / JUAN BARRIOS ALVAREZ / cualquier notaría:
 - FECHA: usar "Fecha Firma" (NO "Fecha" de emisión de factura)
@@ -307,6 +309,14 @@ NOTARÍA / NOTARIOS ALCALA 35 / RAMOS ORTIZ NOTARIOS / B.ENTRENA-L.LOPEZ NOTARIO
 - cuantia = Base Imponible + Base no Sujeta (suplidos: papel timbrado, sellos seguridad, timbres)
   EJEMPLO REAL: BI=1.296,85€ + suplidos (7,95+0,15+0,15)=8,25€ → cuantia = 1.296,85 + 8,25 = 1.305,10€
   Suma cada céntimo. Comprueba que cuantia + iva + otros = Total Factura.
+- IMPORTANTE: Si la factura referencia un NÚMERO DE PROTOCOLO de escritura, usar para identificar activo:
+    · Protocolo 577 (López de Paz) → BB5
+    · Protocolo 2214 (Blanca Valenzuela) → FMM3
+    · Protocolo 2215 (Blanca Valenzuela) → poderes, → AN
+    · Protocolo 2221 (Blanca Valenzuela) → PR30
+    · Protocolo 2457 (Juan Barrios) → PB27
+    · Protocolo 2731 (Juan Barrios) → E65+M1+AG55 (escritura conjunta 3 inmuebles Madrid) → si es factura de notaría CV, dejar activo vacío + notas "CV múltiples inmuebles — usar split"
+  Si un registro o certificación referencia un protocolo, asociar al activo correspondiente.
 
 AGENCIA TRIBUTARIA / COMUNIDAD DE MADRID / MODELO 600 (ITP):
 - ITP ~13.617€ → BB5, Adquisición
@@ -617,7 +627,7 @@ if (!document.getElementById("hide-spinners")) {
 function Field({ label, value, onChange, required, options, type="text", uppercase, negative, formula, dateAuto, suggestions }) {
   const [showSugs, setShowSugs] = useState(false);
   const [sugIdx, setSugIdx] = useState(-1);
-  const [formulaText, setFormulaText] = useState(null); // raw text while editing formula
+  const [rawText, setRawText] = useState(null); // raw text while editing formula/negative fields
   const inputRef = useRef();
   const empty = required && (!value || value === "");
 
@@ -650,7 +660,7 @@ function Field({ label, value, onChange, required, options, type="text", upperca
     ? [...new Set(suggestions)].filter(s => s && s.toLowerCase().startsWith(value.toLowerCase()) && s.toLowerCase() !== value.toLowerCase()).slice(0, 6)
     : [];
 
-  const displayValue = formulaText !== null ? formulaText : (value ?? "");
+  const displayValue = rawText !== null ? rawText : (value ?? "");
   const inputStyle = { width:"100%", background:empty?"#1f0a0a":"#0a1628", border:`1px solid ${empty?"#ef4444":"#1e3a5f"}`, borderRadius:6, color:"#e2e8f0", padding:"8px 10px", fontFamily:"inherit", fontSize:13, outline:"none", boxSizing:"border-box", ...(uppercase ? { textTransform:"uppercase" } : {}) };
 
   return (
@@ -672,30 +682,33 @@ function Field({ label, value, onChange, required, options, type="text", upperca
               onChange={e => {
                 let v = e.target.value;
                 if (uppercase) v = v.toUpperCase();
-                if (negative) {
-                  const cleaned = v.replace(/[^\d.,-]/g, "");
-                  const num = parseFloat(cleaned.replace(",",".")) || 0;
-                  onChange(num <= 0 ? num : -Math.abs(num));
+                if (negative || formula) {
+                  // Keep raw text while typing, parse on blur
+                  setRawText(v);
                   return;
                 }
                 if (dateAuto) { handleDateChange(e); return; }
-                if (formula) { setFormulaText(v); return; }
                 onChange(v);
               }}
               onFocus={() => {
                 if (suggestions) setShowSugs(true);
-                if (formula && formulaText === null && value) setFormulaText(String(value));
+                if ((formula || negative) && rawText === null && value !== null && value !== undefined && value !== "") {
+                  setRawText(String(value));
+                }
               }}
               onBlur={(e) => {
                 setTimeout(() => setShowSugs(false), 150);
-                if (formula && formulaText !== null) {
-                  const result = evalFormula(formulaText);
-                  onChange(result);
-                  setFormulaText(null);
-                }
-                if (negative && e.target.value) {
-                  const num = parseFloat(e.target.value.replace(",",".")) || 0;
-                  if (num > 0) onChange(-num);
+                if (rawText !== null && (formula || negative)) {
+                  if (formula && rawText.includes("+")) {
+                    const result = evalFormula(rawText);
+                    onChange(result);
+                  } else if (negative) {
+                    const num = parseFloat(rawText.replace(",",".")) || 0;
+                    onChange(num > 0 ? -Math.abs(num) : num);
+                  } else {
+                    onChange(parseFloat(rawText.replace(",",".")) || 0);
+                  }
+                  setRawText(null);
                 }
               }}
               onKeyDown={(e) => {
@@ -903,9 +916,10 @@ function PdfViewer({ file }) {
       const page = await pdfDoc.getPage(currentPage);
       if (cancelled) return;
       const canvas = canvasRef.current;
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.max(window.devicePixelRatio || 1, 2); // min 2x for crisp rendering
       const vp0 = page.getViewport({ scale: 1 });
-      const scale = ((canvas.parentElement?.clientWidth || 400) - 2) / vp0.width;
+      const containerWidth = canvas.parentElement?.clientWidth || 500;
+      const scale = (containerWidth - 2) / vp0.width;
       const vp = page.getViewport({ scale: scale * dpr });
       canvas.width = vp.width; canvas.height = vp.height;
       canvas.style.width = `${vp.width/dpr}px`; canvas.style.height = `${vp.height/dpr}px`;
@@ -1881,10 +1895,26 @@ export default function App() {
               <div style={{ display:"flex", gap:8, alignItems:"center" }}>
                 {hasFacFilters && <button onClick={()=>setFacFilters({})} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕ Limpiar filtros</button>}
                 {!confirmBorrarFacturas
-                  ? <button onClick={()=>setConfirmBorrarFacturas(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Borrar facturas</button>
+                  ? <button onClick={()=>setConfirmBorrarFacturas(true)} style={{ background:"transparent", border:"1px solid #450a0a", color:"#f87171", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{filterQ!=="Todos" ? `Borrar ${filterQ}` : "Borrar facturas"}</button>
                   : <span style={{ display:"flex", alignItems:"center", gap:6 }}>
-                      <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro? Se borrarán {invoices.length} facturas</span>
-                      <button onClick={async ()=>{ setInvoices([]); invoicesRef.current=[]; await deleteAllInvoices().catch(()=>{}); setConfirmBorrarFacturas(false); showFlash("Facturas eliminadas.","err"); }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
+                      <span style={{ fontSize:12, color:"#f87171" }}>¿Seguro? Se borrarán {facturasIVA.length} facturas{filterQ!=="Todos"?` de ${filterQ}`:""}</span>
+                      <button onClick={async ()=>{
+                        if (filterQ === "Todos") {
+                          // Borrar todas las facturas (no impuestos)
+                          const toDelete = invoices.filter(inv => !isImpuesto(inv));
+                          const toKeep = invoices.filter(inv => isImpuesto(inv));
+                          for (const inv of toDelete) { await deleteInvoice(inv.id).catch(()=>{}); }
+                          invoicesRef.current = toKeep; setInvoices(toKeep);
+                        } else {
+                          // Borrar solo las del filtro actual
+                          const idsToDelete = new Set(facturasIVA.map(f => f.id));
+                          const toKeep = invoices.filter(inv => !idsToDelete.has(inv.id));
+                          for (const id of idsToDelete) { await deleteInvoice(id).catch(()=>{}); }
+                          invoicesRef.current = toKeep; setInvoices(toKeep);
+                        }
+                        setConfirmBorrarFacturas(false);
+                        showFlash(`Facturas${filterQ!=="Todos"?` de ${filterQ}`:""} eliminadas.`,"err");
+                      }} style={{ background:"#450a0a", border:"1px solid #ef4444", color:"#f87171", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Sí</button>
                       <button onClick={()=>setConfirmBorrarFacturas(false)} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>No</button>
                     </span>}
               </div>
