@@ -529,19 +529,30 @@ const isImpuesto = (inv) => {
 
 const fmt = n => new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", minimumFractionDigits: 2 }).format(n);
 const parseDate = d => { if (!d) return new Date(0); const [day,mon,yr] = d.split("/"); return new Date(`${yr}-${mon}-${day}`); };
+// Strip accents for dedup
+const stripAccents = s => (s||"").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
 const invoiceKey = inv => {
   const fecha   = (inv.fecha||"").trim();
-  const prov    = (inv.proveedor||"").toLowerCase().trim().replace(/\s+/g," ");
+  const prov    = stripAccents((inv.proveedor||"")).toLowerCase().trim().replace(/\s+/g," ").slice(0,15);
   const cuantia = parseFloat(inv.cuantia||0).toFixed(2);
   const iva     = parseFloat(inv.iva||0).toFixed(2);
   const otros   = parseFloat(inv.otros||0).toFixed(2);
-  const num     = (inv.numero||"").trim().toLowerCase();
+  // Normalize number: strip leading zeros, spaces, keep only alphanumeric + / _
+  const num     = stripAccents((inv.numero||"")).toLowerCase().trim().replace(/^0+/,"").replace(/[^a-z0-9/_.-]/g,"");
   const activo  = (inv.activo||"").trim().toUpperCase();
-  const concepto = (inv.concepto||"").toLowerCase().trim().slice(0,40);
-  // Con número: prov + num + activo (la misma factura puede repartirse entre activos)
+  // Con número: prov (first 15 chars, no accents) + num + activo
   if (num) return `${prov}|${num}|${activo}`;
-  // Sin número: todos los campos discriminantes
-  return `${fecha}|${prov}|${cuantia}|${iva}|${otros}|${activo}|${concepto}`;
+  // Sin número: fecha + prov + importes + activo (no concepto — IA changes it between runs)
+  return `${fecha}|${prov}|${cuantia}|${iva}|${otros}|${activo}`;
+};
+// Loose key: fecha + prov prefix + total amount + activo — catches same invoice with different concepto/numero
+const invoiceKeyLoose = inv => {
+  const fecha   = (inv.fecha||"").trim();
+  const prov    = stripAccents((inv.proveedor||"")).toLowerCase().trim().replace(/\s+/g," ").slice(0,8);
+  const total   = (parseFloat(inv.cuantia||0) + parseFloat(inv.iva||0) + parseFloat(inv.otros||0)).toFixed(2);
+  const activo  = (inv.activo||"").trim().toUpperCase();
+  return `${fecha}|${prov}|${total}|${activo}`;
 };
 
 // DD/MM/YYYY → "1T25", "2T25", etc.
@@ -1047,8 +1058,18 @@ export default function App() {
   const resetReview = () => { setDraft(null); setSplitMode(false); setSplits([{activo:"",pct:50},{activo:"",pct:50}]); };
 
   const addInvoices = (newInvs) => {
-    const existing = new Set(invoicesRef.current.map(invoiceKey));
-    const fresh = newInvs.filter(inv => !existing.has(invoiceKey(inv)));
+    const existingExact = new Set(invoicesRef.current.map(invoiceKey));
+    const existingLoose = new Set(invoicesRef.current.map(invoiceKeyLoose));
+    const seenExact = new Set();
+    const seenLoose = new Set();
+    const fresh = newInvs.filter(inv => {
+      const ek = invoiceKey(inv);
+      const lk = invoiceKeyLoose(inv);
+      if (existingExact.has(ek) || existingLoose.has(lk)) return false;
+      if (seenExact.has(ek) || seenLoose.has(lk)) return false;
+      seenExact.add(ek); seenLoose.add(lk);
+      return true;
+    });
     const dupes = newInvs.length - fresh.length;
     if (dupes > 0 && fresh.length === 0) { showFlash("Ya registrada(s), omitidas.", "warn"); return; }
     if (dupes > 0) showFlash(`${dupes} duplicada(s) omitida(s).`, "warn");
