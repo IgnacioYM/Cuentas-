@@ -221,7 +221,8 @@ Procesa TODOS estos tipos:
 - Minutas de honorarios de notarías
 - Facturas de burofax (Correos)
 - ESCRITURAS DE COMPRAVENTA DE INMUEBLES
-- Autoliquidaciones de ITP (Impuesto de Transmisiones Patrimoniales)
+- Autoliquidaciones de ITP (Impuesto de Transmisiones Patrimoniales) — Modelo 600
+- Depósitos de fianzas de arrendamiento — Modelo 251
 NO ignores ningún documento por no tener formato de factura estándar.
 
 ═══ ESCRITURAS DE COMPRAVENTA ═══
@@ -342,6 +343,25 @@ AGENCIA TRIBUTARIA / COMUNIDAD DE MADRID / MODELO 600 (ITP):
   · proveedor = "Agencia Tributaria" o "Comunidad de Madrid" según aparezca
   · iva = 0, otros = null (ITP no lleva IVA ni retención)
   · concepto = "ITP Compraventa [dirección]"
+- DETECCIÓN DE MÚLTIPLES INMUEBLES: Si el documento tiene un Anexo 1 con varias direcciones y valores declarados, O si la Base Imponible es la suma de varios precios de compraventa (ej: 650.277,57 = 188.921,78 + 179.000 + 282.355,79), SIEMPRE generar un objeto por inmueble. NO devolver una sola fila con el total.
+
+DEPÓSITO DE FIANZAS / MODELO 251:
+- Son depósitos de fianzas de arrendamiento ante la Comunidad de Madrid
+- Buscar en sección "5.- Contrato" la dirección del inmueble y en "6.- Autoliquidación" el importe de la fianza
+- proveedor = "Comunidad de Madrid"
+- concepto = "Depósito fianza arrendamiento [dirección]"
+- activo según dirección del contrato:
+    · Elfo 65, Madrid → E65
+    · Molino 1, Villanueva de la Cañada → M1
+    · Alfonso Gómez 55, Madrid → AG55
+    · Barrera de Baix, Palma → BB5
+    · Francesc Martí Mora, Palma → FMM3
+    · Pascual Ribot, Palma → PR30
+    · Pau Bouvy, Palma → PB27
+- También se puede determinar por el nombre del archivo: Fianza_E65 → E65, Fianza_AG55 → AG55
+- categoria = "Costes de posesión"
+- cuantia = importe total fianza, iva = 0, otros = null
+- fecha = fecha del contrato o fecha de ingreso (sección 7)
 
 GABRIEL LLABRÉS COMAMALA:
 - Siempre → BB5, Capex (arquitecto)
@@ -375,12 +395,14 @@ PEDRO FERNÁNDEZ / PEDRO FERNÁNDEZ CASTAÑO:
 - IMPORTANTE: puede ser un acuerdo firmado, no factura estándar. Procesarlo igual.
 
 ═══ DOCUMENTOS QUE NO SON FACTURAS — DESCARTAR ═══
-Si el documento es una DECLARACIÓN FISCAL (Modelo 111, 303, 200, 202, 347, 349, 390, etc.):
+Si el documento es una DECLARACIÓN FISCAL de las siguientes: Modelo 111, 303, 200, 202, 347, 349, 390:
 - Estos son presentaciones de impuestos ante la Agencia Tributaria
 - NO son facturas aunque aparezca un "presentador" como Alzai
 - El importe del Modelo 111 (retenciones IRPF) ya está contabilizado en las facturas individuales
 - El Modelo 303 (IVA) es una declaración de IVA, no una factura
-- Responde: {"descartado":true,"motivo":"Declaración fiscal Modelo [nº] — no es factura","modelo":"111","periodo":"1T2025","importe":61.84}
+- Responde: [{"descartado":true,"motivo":"Declaración fiscal Modelo [nº] — no es factura","modelo":"111","periodo":"1T2025","importe":61.84}]
+IMPORTANTE: El Modelo 251 (Depósito de Fianzas) NO es una declaración fiscal a descartar — es un documento contable que SÍ hay que procesar. Ver sección "DEPÓSITO DE FIANZAS / MODELO 251".
+IMPORTANTE: El Modelo 600 (ITP) NO es una declaración a descartar — es un impuesto que SÍ hay que procesar. Ver sección "AGENCIA TRIBUTARIA / COMUNIDAD DE MADRID / MODELO 600".
 
 ═══ EXTRACCIÓN DE IMPORTES ═══
 - "cuantia" = Base Imponible + Base no Sujeta + suplidos. TODO antes de IVA y retención.
@@ -507,10 +529,31 @@ const validateInvoice = (inv, filename) => {
     }
   }
 
-  // 16. Detectar declaraciones fiscales que la IA no descartó (safety net)
-  if (concepto.includes("modelo 111") || concepto.includes("modelo 303") || concepto.includes("modelo 200") ||
-      concepto.includes("modelo 202") || concepto.includes("modelo 347") || concepto.includes("modelo 390") ||
-      (file.includes("mod_111") || file.includes("mod_303") || file.includes("mod_200"))) {
+  // 16. Fianzas — assign activo by filename or concepto address
+  if (concepto.includes("fianza") || concepto.includes("deposito fianza") || concepto.includes("depósito fianza") || 
+      concepto.includes("modelo 251") || file.includes("fianza") || file.includes("mod_251")) {
+    v.categoria = "Costes de posesión";
+    v.iva = 0; v.otros = null;
+    if (!v.activo) {
+      if (file.includes("e65") || concepto.includes("elfo")) v.activo = "E65";
+      else if (file.includes("m1") || concepto.includes("molino")) v.activo = "M1";
+      else if (file.includes("ag55") || concepto.includes("alfonso")) v.activo = "AG55";
+      else if (file.includes("bb5") || concepto.includes("barrera")) v.activo = "BB5";
+      else if (file.includes("fmm3") || concepto.includes("francesc")) v.activo = "FMM3";
+      else if (file.includes("pr30") || concepto.includes("ribot")) v.activo = "PR30";
+      else if (file.includes("pb27") || concepto.includes("bouvy") || concepto.includes("bartolom")) v.activo = "PB27";
+    }
+  }
+
+  // 17. Detectar declaraciones fiscales que la IA no descartó (safety net)
+  // EXCLUIR: Modelo 251 (fianzas) y Modelo 600 (ITP) — son documentos contables válidos
+  const isDeclaracionFiscal = (
+    concepto.includes("modelo 111") || concepto.includes("modelo 303") || concepto.includes("modelo 200") ||
+    concepto.includes("modelo 202") || concepto.includes("modelo 347") || concepto.includes("modelo 390") ||
+    (file.includes("mod_111") || file.includes("mod_303") || file.includes("mod_200"))
+  ) && !concepto.includes("modelo 251") && !concepto.includes("modelo 600") &&
+    !file.includes("mod_251") && !file.includes("fianza");
+  if (isDeclaracionFiscal) {
     v._descartado = true;
     v._motivo = `Declaración fiscal detectada (${concepto.slice(0,50)}) — no es factura`;
   }
@@ -527,13 +570,20 @@ const isImpuesto = (inv) => {
   // Auto-detect
   const prov = (inv.proveedor||"").toLowerCase();
   const concepto = (inv.concepto||"").toLowerCase();
+  // ITP
   if (concepto.includes("itp") || concepto.includes("transmisiones patrimoniales")) return true;
   if (concepto.includes("modelo 600")) return true;
+  // IBI
   if (concepto.includes("ibi") || concepto.includes("impuesto sobre bienes inmuebles")) return true;
+  // Fianzas
+  if (concepto.includes("fianza") || concepto.includes("depósito fianza") || concepto.includes("deposito fianza")) return true;
+  if (concepto.includes("modelo 251")) return true;
+  // ICIO
   if (concepto.includes("icio") && (prov.includes("ajuntament") || prov.includes("ayuntamiento"))) return true;
+  // Agencia Tributaria / Comunidad de Madrid con ITP/fianza
   if ((prov.includes("agencia tributaria") || prov.includes("comunidad de madrid") || prov.includes("hacienda")) &&
       (concepto.includes("compraventa") || concepto.includes("transmisi"))) return true;
-  if (prov.includes("comunidad de madrid") && concepto.includes("modelo 600")) return true;
+  if (prov.includes("comunidad de madrid") && (concepto.includes("modelo 600") || concepto.includes("fianza"))) return true;
   return false;
 };
 
@@ -992,6 +1042,8 @@ export default function App() {
   const [editMode, setEditMode]     = useState(false);
   const [editingId, setEditingId]   = useState(null);
   const [editDraft, setEditDraft]   = useState(null);
+  const [editSplitMode, setEditSplitMode] = useState(false);
+  const [editSplits, setEditSplits] = useState([{activo:"",pct:50},{activo:"",pct:50}]);
   // Escrituras from Supabase
   const [escriturasDB, setEscriturasDB] = useState([]);
   // Bank movements
@@ -1103,7 +1155,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 4096, system: SYSTEM_PROMPT,
+            model: "claude-sonnet-4-20250514", max_tokens: 8192, system: SYSTEM_PROMPT,
             messages: [{ role:"user", content:[
               { type:"document", source:{ type:"base64", media_type:"application/pdf", data:base64 }},
               { type:"text", text:`Extrae y clasifica TODAS las facturas de este documento. Si el PDF contiene varias facturas (una por página), devuelve un ARRAY JSON con un objeto por factura. Si es una sola factura, devuelve igualmente un array con un solo elemento. Archivo: "${filename}". Responde SOLO el JSON array.` }
@@ -1145,21 +1197,22 @@ export default function App() {
       r.onload = e => res({ base64: e.target.result.split(",")[1], name: file.name, file });
       r.onerror = rej; r.readAsDataURL(file);
     })));
-    // Process in batches of 2 for speed
-    const BATCH = 2, results = [];
-    for (let i = 0; i < fileData.length; i += BATCH) {
-      const batch = fileData.slice(i, i + BATCH);
-      const br = await Promise.allSettled(batch.map(fd => callAPI(fd.base64, fd.name)));
-      br.forEach((r, j) => {
-        results.push({
-          result: r.status === "fulfilled"
-            ? { status: "fulfilled", value: r.value }
-            : { status: "rejected", reason: r.reason?.message || "Error desconocido" },
-          fd: batch[j]
-        });
-      });
-      setProgress({ current: Math.min(i + BATCH, fileData.length), total: fileData.length });
-      if (i + BATCH < fileData.length) await new Promise(r => setTimeout(r, 3000));
+    // Process PDFs sequentially — multi-page PDFs need full attention
+    const results = [];
+    for (let i = 0; i < fileData.length; i++) {
+      const fd = fileData[i];
+      setProgress({ current: i + 1, total: fileData.length });
+      try {
+        const value = await callAPI(fd.base64, fd.name);
+        results.push({ result: { status: "fulfilled", value }, fd });
+      } catch (err) {
+        results.push({ result: { status: "rejected", reason: err?.message || "Error desconocido" }, fd });
+      }
+      if (i < fileData.length - 1) {
+        // Larger PDFs (multi-page) need more cooldown to avoid 429/truncation
+        const delayMs = fd.base64.length > 100000 ? 5000 : 3000;
+        await new Promise(r => setTimeout(r, delayMs));
+      }
     }
     const autoSaved = [], needsReview = [], descartados = [], failedPdfs = [];
     for (const { result, fd } of results) {
@@ -1377,17 +1430,39 @@ export default function App() {
     setEditingId(mov.id);
     setEditDraft({ ...mov });
   };
-  const cancelEdit = () => { setEditingId(null); setEditDraft(null); };
+  const cancelEdit = () => { setEditingId(null); setEditDraft(null); setEditSplitMode(false); setEditSplits([{activo:"",pct:50},{activo:"",pct:50}]); };
   const saveEdit = async () => {
     if (!editDraft) return;
-    // Update in the correct store based on type
-    const updated = invoices.map(inv => inv.id === editDraft.id ? { ...inv, fecha: editDraft.fecha, proveedor: editDraft.proveedor, concepto: editDraft.concepto, activo: editDraft.activo, categoria: editDraft.categoria, cuantia: parseFloat(editDraft.cuantia)||0, iva: parseFloat(editDraft.iva)||0, otros: editDraft.otros ? parseFloat(editDraft.otros) : null, comentario: editDraft.comentario||"" } : inv);
-    invoicesRef.current = updated;
-    setInvoices(updated);
-    // Sync single invoice to Supabase
-    const target = updated.find(inv => inv.id === editDraft.id);
-    if (target) updateSingleInvoice(target).catch(() => {});
-    showFlash("Guardado.");
+    if (editSplitMode) {
+      // Split: delete original, create N new invoices
+      const totalPctEdit = editSplits.reduce((a,s)=>a+(s.pct||0),0);
+      if (!editSplits.every(s=>s.activo) || Math.abs(totalPctEdit-100)>=0.01) { showFlash("Split: selecciona activos y que los % sumen 100%.","err"); return; }
+      const base = { ...editDraft, cuantia: parseFloat(editDraft.cuantia)||0, iva: parseFloat(editDraft.iva)||0, otros: editDraft.otros ? parseFloat(editDraft.otros) : null, comentario: editDraft.comentario||"" };
+      const newInvs = editSplits.map((s, si) => ({
+        ...base, id: crypto.randomUUID(), activo: s.activo,
+        numero: base.numero ? `${base.numero}-${si+1}` : "",
+        cuantia: parseFloat(((s.pct/100)*base.cuantia).toFixed(2)),
+        iva: parseFloat(((s.pct/100)*base.iva).toFixed(2)),
+        otros: base.otros!=null ? parseFloat(((s.pct/100)*base.otros).toFixed(2)) : null,
+        comentario: `${s.pct}% de factura original${base.comentario ? " — "+base.comentario : ""}`,
+      }));
+      // Remove original
+      const withoutOrig = invoices.filter(inv => inv.id !== editDraft.id);
+      await deleteInvoice(editDraft.id).catch(()=>{});
+      // Add splits
+      const merged = [...withoutOrig, ...newInvs].sort((a,b) => parseDate(a.fecha) - parseDate(b.fecha));
+      invoicesRef.current = merged; setInvoices(merged);
+      // Sync to Supabase
+      await upsertInvoices(newInvs).catch(()=>{});
+      showFlash(`✓ Dividida en ${newInvs.length} partes.`);
+    } else {
+      const updated = invoices.map(inv => inv.id === editDraft.id ? { ...inv, fecha: editDraft.fecha, proveedor: editDraft.proveedor, concepto: editDraft.concepto, activo: editDraft.activo, categoria: editDraft.categoria, cuantia: parseFloat(editDraft.cuantia)||0, iva: parseFloat(editDraft.iva)||0, otros: editDraft.otros ? parseFloat(editDraft.otros) : null, comentario: editDraft.comentario||"" } : inv);
+      invoicesRef.current = updated;
+      setInvoices(updated);
+      const target = updated.find(inv => inv.id === editDraft.id);
+      if (target) updateSingleInvoice(target).catch(() => {});
+      showFlash("Guardado.");
+    }
     cancelEdit();
   };
   const addManualRow = () => {
@@ -1488,7 +1563,7 @@ export default function App() {
       </div>
 
       <div style={{ display:"flex", borderBottom:"1px solid #1e3a5f", padding:"0 32px", overflowX:"auto" }}>
-        {TABS.map(([key,label]) => <button key={key} onClick={()=>setTab(key)} style={{ background:"none", border:"none", cursor:"pointer", padding:"12px 20px", fontSize:13, fontFamily:"inherit", color:tab===key?"#3b82f6":"#64748b", borderBottom:tab===key?"2px solid #3b82f6":"2px solid transparent", marginBottom:-1, whiteSpace:"nowrap" }}>{label}</button>)}
+        {TABS.map(([key,label]) => <button key={key} onClick={()=>{ setTab(key); if(editMode){ setEditMode(false); cancelEdit(); } }} style={{ background:"none", border:"none", cursor:"pointer", padding:"12px 20px", fontSize:13, fontFamily:"inherit", color:tab===key?"#3b82f6":"#64748b", borderBottom:tab===key?"2px solid #3b82f6":"2px solid transparent", marginBottom:-1, whiteSpace:"nowrap" }}>{label}</button>)}
       </div>
 
       <div style={{ padding:"24px 32px" }}>
@@ -1804,7 +1879,7 @@ export default function App() {
                     // ── Editing row ──
                     const ed = editDraft;
                     const etotal = (parseFloat(ed.cuantia)||0)+(parseFloat(ed.iva)||0)+(ed.otros?parseFloat(ed.otros):0);
-                    return <tr key={mov.id+"-edit"} style={{ background:"#0d1f35" }}>
+                    return <><tr key={mov.id+"-edit"} style={{ background:"#0d1f35" }}>
                       <td style={{ padding:"4px 6px" }}><input value={ed.fecha||""} onChange={e=>setEditDraft(d=>({...d,fecha:e.target.value}))} style={{ width:80, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
                       <td style={{ padding:"4px 6px" }}><span style={{ background:"#0f2942", color:"#93c5fd", padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:600 }}>{getQuarter(ed.fecha)}</span></td>
                       <td style={{ padding:"4px 6px" }}><select value={isImpuesto(ed) ? "Impuesto" : "Factura"} onChange={e=>{
@@ -1819,7 +1894,14 @@ export default function App() {
                       }} style={{ background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:11, outline:"none" }}><option value="Factura">Factura</option><option value="Impuesto">Impuesto</option></select></td>
                       <td style={{ padding:"4px 6px" }}><input value={ed.proveedor||""} onChange={e=>setEditDraft(d=>({...d,proveedor:e.target.value}))} style={{ width:120, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
                       <td style={{ padding:"4px 6px" }}><input value={ed.concepto||""} onChange={e=>setEditDraft(d=>({...d,concepto:e.target.value}))} style={{ width:140, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }} /></td>
-                      <td style={{ padding:"4px 6px" }}><select value={ed.activo||""} onChange={e=>setEditDraft(d=>({...d,activo:e.target.value}))} style={{ background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select></td>
+                      <td style={{ padding:"4px 6px" }}>
+                        {!editSplitMode
+                          ? <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                              <select value={ed.activo||""} onChange={e=>setEditDraft(d=>({...d,activo:e.target.value}))} style={{ background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select>
+                              <button onClick={()=>{ setEditSplitMode(true); setEditSplits([{activo:ed.activo||"",pct:50},{activo:"",pct:50}]); }} title="Repartir entre activos" style={{ background:"transparent", border:"1px solid #1e3a5f", color:"#475569", padding:"2px 6px", borderRadius:4, cursor:"pointer", fontSize:10, fontFamily:"inherit" }}>⇅</button>
+                            </div>
+                          : <span style={{ fontSize:10, color:"#fbbf24" }}>Split ↓</span>}
+                      </td>
                       <td style={{ padding:"4px 6px" }}><select value={ed.categoria||""} onChange={e=>setEditDraft(d=>({...d,categoria:e.target.value}))} style={{ width:120, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 4px", fontFamily:"inherit", fontSize:11, outline:"none" }}><option value="">—</option>{CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}</select></td>
                       <td style={{ padding:"4px 6px" }}><input type="number" value={ed.cuantia||""} onChange={e=>setEditDraft(d=>({...d,cuantia:e.target.value}))} style={{ width:70, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
                       <td style={{ padding:"4px 6px" }}><input type="number" value={ed.iva||""} onChange={e=>setEditDraft(d=>({...d,iva:e.target.value}))} style={{ width:60, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /></td>
@@ -1831,7 +1913,31 @@ export default function App() {
                         <button onClick={saveEdit} style={{ background:"#052e16", border:"1px solid #22c55e", color:"#4ade80", padding:"2px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit", marginRight:4 }}>✓</button>
                         <button onClick={cancelEdit} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"2px 8px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕</button>
                       </td>
-                    </tr>;
+                    </tr>
+                    {editSplitMode && editSplits.map((sp, si) => {
+                      const spTotal = (sp.pct/100) * ((parseFloat(ed.cuantia)||0)+(parseFloat(ed.iva)||0)+(ed.otros?parseFloat(ed.otros):0));
+                      return <tr key={`split-${si}`} style={{ background:"#0d1f35" }}>
+                        <td colSpan={5} style={{ padding:"4px 6px", textAlign:"right" }}>
+                          {si === 0 && <button onClick={()=>{ setEditSplitMode(false); setEditSplits([{activo:"",pct:50},{activo:"",pct:50}]); }} style={{ background:"transparent", border:"1px solid #334155", color:"#64748b", padding:"2px 8px", borderRadius:4, cursor:"pointer", fontSize:10, fontFamily:"inherit", marginRight:8 }}>✕ Cancelar split</button>}
+                          <span style={{ fontSize:10, color:"#fbbf24" }}>Parte {si+1}</span>
+                        </td>
+                        <td style={{ padding:"4px 6px" }}><select value={sp.activo} onChange={e=>setEditSplits(prev=>prev.map((x,j)=>j===si?{...x,activo:e.target.value}:x))} style={{ background:"#080f1a", border:`1px solid ${sp.activo?"#3b82f6":"#ef4444"}`, borderRadius:4, color:"#e2e8f0", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none" }}><option value="">—</option>{ACTIVOS.map(a=><option key={a} value={a}>{a}</option>)}</select></td>
+                        <td colSpan={2} style={{ padding:"4px 6px" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+                            <input type="number" min="0" max="100" step="0.01" value={sp.pct} onChange={e=>setEditSplits(prev=>prev.map((x,j)=>j===si?{...x,pct:parseFloat(e.target.value)||0}:x))} style={{ width:50, background:"#080f1a", border:"1px solid #3b82f6", borderRadius:4, color:"#93c5fd", padding:"4px 6px", fontFamily:"inherit", fontSize:12, outline:"none", textAlign:"right" }} /><span style={{ color:"#475569", fontSize:10 }}>%</span>
+                          </div>
+                        </td>
+                        <td style={{ padding:"4px 6px", textAlign:"right", color:"#4ade80", fontSize:12, fontWeight:600 }}>{fmt(spTotal)}</td>
+                        <td colSpan={2} style={{ padding:"4px 6px", textAlign:"right" }}>
+                          {si === editSplits.length - 1 && <button onClick={()=>setEditSplits(prev=>[...prev,{activo:"",pct:0}])} style={{ background:"transparent", border:"1px solid #1e3a5f", color:"#475569", padding:"2px 8px", borderRadius:4, cursor:"pointer", fontSize:10, fontFamily:"inherit" }}>＋</button>}
+                          {editSplits.length > 2 && <button onClick={()=>setEditSplits(prev=>prev.filter((_,j)=>j!==si))} style={{ background:"transparent", border:"none", color:"#475569", cursor:"pointer", fontSize:12, padding:"2px 4px", marginLeft:4 }}>✕</button>}
+                        </td>
+                        <td style={{ padding:"4px 6px" }}>
+                          {si === editSplits.length - 1 && <span style={{ fontSize:10, color:Math.abs(editSplits.reduce((a,s)=>a+(s.pct||0),0)-100)<0.01?"#4ade80":"#f87171" }}>{editSplits.reduce((a,s)=>a+(s.pct||0),0).toFixed(0)}%</span>}
+                        </td>
+                      </tr>;
+                    })}
+                    </>;
                   }
 
                   // ── Normal row ──
