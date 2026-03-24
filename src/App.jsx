@@ -227,6 +227,8 @@ NO ignores ningún documento por no tener formato de factura estándar.
 
 ═══ ESCRITURAS DE COMPRAVENTA ═══
 Si el documento es una ESCRITURA de compraventa (no una factura de notaría, sino la propia escritura):
+
+ENTRADA PRINCIPAL — LA COMPRAVENTA:
 - fecha: fecha de firma de la escritura
 - proveedor: nombre del vendedor tal como aparece
 - concepto: "Compraventa [dirección completa del inmueble]"
@@ -244,6 +246,39 @@ Si el documento es una ESCRITURA de compraventa (no una factura de notaría, sin
 - iva: 0 (las compraventas de segunda mano no llevan IVA, llevan ITP aparte)
 - otros: 0
 - notas: "Escritura: Notaría [nombre], protocolo [nº]. Ref catastral: [ref]. Superficie: [m²]m²"
+
+ENTRADAS ADICIONALES — EXTRAER SIEMPRE QUE APAREZCAN EN LA ESCRITURA:
+
+A) IBI PRORRATEADO — Buscar secciones "Impuesto sobre Bienes Inmuebles", "tributos locales del año en curso":
+- Si la escritura menciona un pago de IBI prorrateado que el comprador entrega al vendedor:
+  · Generar UNA ENTRADA POR INMUEBLE
+  · Si hay un importe global para varios inmuebles, repartir proporcionalmente al precio de cada finca
+  · proveedor: el vendedor (quien recibe el pago de IBI)
+  · concepto: "IBI prorrateado [dirección inmueble] — compraventa"
+  · activo: según inmueble
+  · categoria: "Costes de posesión"
+  · cuantia: importe del IBI prorrateado de ese inmueble
+  · iva: 0, otros: null
+  · fecha: fecha firma escritura
+  · Ejemplo: IBI total 112,62€ para 3 fincas con precios 165.000 + 179.000 + 279.650 = 623.650€
+    → E65: 112,62 × (165.000 / 623.650) = 29,80€
+    → M1:  112,62 × (179.000 / 623.650) = 32,33€
+    → AG55: 112,62 × (279.650 / 623.650) = 50,49€
+
+B) FIANZA ARRENDATICIA — Buscar secciones "fianza arrendaticia", "depósito de fianza", "10% restante":
+- Si la escritura indica que el vendedor transferirá un importe de fianza al comprador:
+  · Generar una entrada por cada fianza mencionada
+  · proveedor: el vendedor (quien transfiere la fianza)
+  · concepto: "Fianza arrendaticia [dirección] — transferencia vendedor"
+  · activo: según inmueble (identificar por nº de finca o dirección)
+  · categoria: "Costes de posesión"
+  · cuantia: importe NEGATIVO (es un ingreso para Arena Nexus, no un gasto)
+  · iva: 0, otros: null
+  · notas: "Transferencia 10% fianza — Finca [nº]"
+  · Ejemplo: fianza 10% de 51,05€ para Finca 11043 (M1) → cuantia: -51.05
+
+C) FIANZAS NO ENTREGADAS — Si la escritura dice "fianzas no se entregan" para alguna finca:
+  · NO generar entrada. Solo anotar en notas de la compraventa principal que no hay fianza.
 
 ═══ REGLAS POR PROVEEDOR ═══
 
@@ -545,6 +580,28 @@ const validateInvoice = (inv, filename) => {
     }
   }
 
+  // 16b. IBI prorrateado — from escrituras
+  if (concepto.includes("ibi prorrateado") || concepto.includes("ibi prorrate")) {
+    v.categoria = "Costes de posesión";
+    v.iva = 0; v.otros = null;
+    if (!v.activo) {
+      if (concepto.includes("elfo")) v.activo = "E65";
+      else if (concepto.includes("molino")) v.activo = "M1";
+      else if (concepto.includes("alfonso")) v.activo = "AG55";
+      else if (concepto.includes("barrera")) v.activo = "BB5";
+      else if (concepto.includes("francesc") || concepto.includes("marti mora")) v.activo = "FMM3";
+      else if (concepto.includes("ribot")) v.activo = "PR30";
+      else if (concepto.includes("bouvy") || concepto.includes("bartolom")) v.activo = "PB27";
+    }
+  }
+
+  // 16c. Fianza arrendaticia (transferencia vendedor) — cuantia should be negative (ingreso)
+  if (concepto.includes("fianza arrendaticia") && concepto.includes("transferencia")) {
+    v.categoria = "Costes de posesión";
+    v.iva = 0; v.otros = null;
+    if ((v.cuantia||0) > 0) v.cuantia = -Math.abs(v.cuantia); // Must be negative (ingreso)
+  }
+
   // 17. Detectar declaraciones fiscales que la IA no descartó (safety net)
   // EXCLUIR: Modelo 251 (fianzas) y Modelo 600 (ITP) — son documentos contables válidos
   const isDeclaracionFiscal = (
@@ -576,8 +633,10 @@ const isImpuesto = (inv) => {
   // IBI
   if (concepto.includes("ibi") || concepto.includes("impuesto sobre bienes inmuebles")) return true;
   // Fianzas
-  if (concepto.includes("fianza") || concepto.includes("depósito fianza") || concepto.includes("deposito fianza")) return true;
+  if (concepto.includes("fianza") || concepto.includes("depósito fianza") || concepto.includes("deposito fianza") || concepto.includes("fianza arrendaticia")) return true;
   if (concepto.includes("modelo 251")) return true;
+  // IBI prorrateado
+  if (concepto.includes("ibi prorrateado")) return true;
   // ICIO
   if (concepto.includes("icio") && (prov.includes("ajuntament") || prov.includes("ayuntamiento"))) return true;
   // Agencia Tributaria / Comunidad de Madrid con ITP/fianza
