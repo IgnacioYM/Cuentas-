@@ -1207,18 +1207,61 @@ export default function App() {
   const API_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
     ? "https://api.anthropic.com/v1/messages" : "/api/analyze";
 
-  const callAPI = async (base64, filename, retries=2) => {
+  // Extract text from PDF using pdf.js for large documents
+  const extractPdfText = async (file) => {
+    if (!window.pdfjsLib) {
+      await new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+    const buf = await file.arrayBuffer();
+    const doc = await window.pdfjsLib.getDocument({ data: buf }).promise;
+    const pages = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const text = content.items.map(item => item.str).join(" ");
+      if (text.trim()) pages.push(`[Página ${i}] ${text}`);
+    }
+    return pages.join("\n\n");
+  };
+
+  const MAX_BASE64_SIZE = 2 * 1024 * 1024; // 2MB — above this, send as text
+
+  const callAPI = async (base64, filename, retries=2, file=null) => {
+    // For large PDFs, extract text and send as text instead of base64 document
+    const isLarge = base64.length > MAX_BASE64_SIZE;
+    let pdfText = null;
+    if (isLarge && file) {
+      try {
+        pdfText = await extractPdfText(file);
+        console.log(`Large PDF ${filename}: extracted ${pdfText.length} chars of text (base64 was ${(base64.length/1024/1024).toFixed(1)}MB)`);
+      } catch (e) {
+        console.error(`Text extraction failed for ${filename}:`, e);
+        // Fall back to base64 anyway
+      }
+    }
+
     for (let attempt=0; attempt<=retries; attempt++) {
       try {
+        const userContent = pdfText
+          ? [{ type:"text", text:`Este es el texto extraído de un PDF grande (${filename}). Extrae y clasifica TODAS las facturas, escrituras, IBI, fianzas y otros documentos contables. Si hay varias entradas, devuelve un ARRAY JSON. Responde SOLO el JSON array.\n\n--- TEXTO DEL DOCUMENTO ---\n${pdfText}` }]
+          : [
+              { type:"document", source:{ type:"base64", media_type:"application/pdf", data:base64 }},
+              { type:"text", text:`Extrae y clasifica TODAS las facturas de este documento. Si el PDF contiene varias facturas (una por página), devuelve un ARRAY JSON con un objeto por factura. Si es una sola factura, devuelve igualmente un array con un solo elemento. Archivo: "${filename}". Responde SOLO el JSON array.` }
+            ];
+
         const res = await fetch(API_URL, {
           method: "POST",
           headers: { "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
           body: JSON.stringify({
             model: "claude-sonnet-4-20250514", max_tokens: 8192, system: SYSTEM_PROMPT,
-            messages: [{ role:"user", content:[
-              { type:"document", source:{ type:"base64", media_type:"application/pdf", data:base64 }},
-              { type:"text", text:`Extrae y clasifica TODAS las facturas de este documento. Si el PDF contiene varias facturas (una por página), devuelve un ARRAY JSON con un objeto por factura. Si es una sola factura, devuelve igualmente un array con un solo elemento. Archivo: "${filename}". Responde SOLO el JSON array.` }
-            ]}]
+            messages: [{ role:"user", content: userContent }]
           })
         });
         if (res.status === 429) { await new Promise(r => setTimeout(r, (attempt+1)*5000)); continue; }
@@ -1262,7 +1305,7 @@ export default function App() {
       const fd = fileData[i];
       setProgress({ current: i + 1, total: fileData.length });
       try {
-        const value = await callAPI(fd.base64, fd.name);
+        const value = await callAPI(fd.base64, fd.name, 2, fd.file);
         results.push({ result: { status: "fulfilled", value }, fd });
       } catch (err) {
         results.push({ result: { status: "rejected", reason: err?.message || "Error desconocido" }, fd });
